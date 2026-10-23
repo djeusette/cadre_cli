@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -79,6 +80,48 @@ func TestCreateProjectValidation(t *testing.T) {
 	var verr *api.ValidationError
 	if !errors.As(err, &verr) || len(verr.Errors) != 2 || verr.Errors[1] != (api.FieldError{Path: "slug", Message: "taken"}) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRedeemLoginRejectsEmptyKeyOrEmail(t *testing.T) {
+	for _, body := range []string{`{"api_key":"","email":"a@b.c"}`, `{"api_key":"k","email":""}`, `{}`} {
+		c := newClient(t, reply(200, body))
+		if got, err := c.RedeemLogin(context.Background(), "dev"); err == nil || got != (api.Redeemed{}) {
+			t.Errorf("body %s: got %+v, %v", body, got, err)
+		}
+	}
+}
+
+func TestNonJSONSuccessNamesServerAndStatus(t *testing.T) {
+	c := newClient(t, reply(200, `<html>proxy</html>`))
+	_, err := c.Me(context.Background())
+	var syn *json.SyntaxError
+	if err == nil || !errors.As(err, &syn) ||
+		!strings.Contains(err.Error(), "unexpected response from "+c.BaseURL+" (status 200)") ||
+		strings.Contains(err.Error(), "cadre_secret") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestCreateProjectEmptyValidationErrors(t *testing.T) {
+	for _, body := range []string{`{"errors":[]}`, `{}`, `nope`} {
+		c := newClient(t, reply(422, body))
+		_, err := c.CreateProject(context.Background(), []byte(`{}`))
+		var verr *api.ValidationError
+		var serr *api.StatusError
+		if errors.As(err, &verr) || !errors.As(err, &serr) || serr.Status != 422 {
+			t.Errorf("body %s: err = %v", body, err)
+		}
+	}
+}
+
+func TestResponseBodyIsBounded(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+		io.WriteString(w, `{"email":"`+strings.Repeat("a", 2<<20)+`"}`)
+	})
+	if _, err := c.Me(context.Background()); err == nil {
+		t.Fatal("expected an error for an oversized body")
 	}
 }
 

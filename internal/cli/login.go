@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/colette-club/cadre/cli/internal/api"
@@ -21,10 +22,7 @@ func login(ctx context.Context, s *session, _ []string) int {
 	out := s.progress()
 	fmt.Fprintf(out, "Opening %s in your browser.\n", started.VerificationURI)
 	fmt.Fprintf(out, "Check that the page shows this code: %s\n", started.UserCode)
-	if s.env.OpenBrowser != nil {
-		// The URL is already printed, so the user can open it by hand.
-		_ = s.env.OpenBrowser(started.VerificationURI)
-	}
+	s.openBrowser(started.VerificationURI)
 
 	redeemed, err := pollForApproval(ctx, s, started)
 	switch {
@@ -45,6 +43,34 @@ func login(ctx context.Context, s *session, _ []string) int {
 	}
 	fmt.Fprintf(s.env.Stdout, "Signed in as %s.\n", redeemed.Email)
 	return 0
+}
+
+// openBrowser opens uri only when it points at the server the CLI is talking to,
+// so a hostile server cannot make the CLI launch file: or custom-scheme handlers.
+// A failure to open is not an error: the URL is already printed for the user.
+func (s *session) openBrowser(uri string) {
+	if s.env.OpenBrowser == nil {
+		return
+	}
+	if !sameServer(uri, s.baseURL) {
+		fmt.Fprintf(s.env.Stderr, "Not opening an unexpected URL: %s\n", uri)
+		return
+	}
+	_ = s.env.OpenBrowser(uri)
+}
+
+// sameServer reports whether uri is https (or http when base is http), on base's host and port, without userinfo.
+func sameServer(uri, base string) bool {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return false
+	}
+	b, err := url.Parse(base)
+	if err != nil {
+		return false
+	}
+	schemeOK := u.Scheme == "https" || (u.Scheme == "http" && b.Scheme == "http")
+	return schemeOK && u.User == nil && u.Host != "" && u.Host == b.Host
 }
 
 // pollForApproval redeems the device code every interval until it is approved,

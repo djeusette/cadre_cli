@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"time"
 
 	"github.com/colette-club/cadre/cli/internal/api"
 	"github.com/colette-club/cadre/cli/internal/config"
@@ -56,17 +54,10 @@ func runCommand(env Env, asJSON bool, args []string, wantArgs int, cmd command) 
 			BaseURL:   baseURL,
 			APIKey:    cfg.APIKey,
 			UserAgent: "cadre-cli/" + env.Version,
-			HTTP:      httpClient(env),
+			HTTP:      env.HTTP,
 		},
 	}
 	return cmd(context.Background(), s, args)
-}
-
-func httpClient(env Env) *http.Client {
-	if env.HTTP != nil {
-		return env.HTTP
-	}
-	return &http.Client{Timeout: 15 * time.Second}
 }
 
 // progress is where status lines go: stdout, or stderr when stdout carries JSON.

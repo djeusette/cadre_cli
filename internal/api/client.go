@@ -79,6 +79,11 @@ type Created struct {
 	Raw        []byte `json:"-"`
 }
 
+const (
+	maxResponseBytes = 1 << 20
+	defaultTimeout   = 15 * time.Second
+)
+
 // Client talks to one Cadre server. APIKey may be empty for the login calls.
 type Client struct {
 	BaseURL   string
@@ -97,7 +102,7 @@ func (c *Client) StartLogin(ctx context.Context) (Login, error) {
 	if status != http.StatusCreated {
 		return login, &StatusError{Status: status}
 	}
-	return login, json.Unmarshal(body, &login)
+	return login, c.decode(status, body, &login)
 }
 
 // RedeemLogin exchanges an approved device code for an API key.
@@ -114,7 +119,13 @@ func (c *Client) RedeemLogin(ctx context.Context, deviceCode string) (Redeemed, 
 	}
 	switch status {
 	case http.StatusOK:
-		return redeemed, json.Unmarshal(body, &redeemed)
+		if err := c.decode(status, body, &redeemed); err != nil {
+			return Redeemed{}, err
+		}
+		if redeemed.APIKey == "" || redeemed.Email == "" {
+			return Redeemed{}, c.unexpected(status, errors.New("the answer has no api_key or email"))
+		}
+		return redeemed, nil
 	case http.StatusAccepted:
 		return redeemed, ErrPending
 	case http.StatusGone:
@@ -135,7 +146,7 @@ func (c *Client) Me(ctx context.Context) (Me, error) {
 	}
 	switch status {
 	case http.StatusOK:
-		return me, json.Unmarshal(body, &me)
+		return me, c.decode(status, body, &me)
 	case http.StatusUnauthorized:
 		return me, ErrUnauthorized
 	default:
@@ -154,12 +165,12 @@ func (c *Client) CreateProject(ctx context.Context, body []byte) (Created, error
 	switch status {
 	case http.StatusCreated:
 		created.Raw = resp
-		return created, json.Unmarshal(resp, &created)
+		return created, c.decode(status, resp, &created)
 	case http.StatusUnauthorized:
 		return created, ErrUnauthorized
 	case http.StatusUnprocessableEntity:
 		verr := &ValidationError{}
-		if err := json.Unmarshal(resp, verr); err != nil {
+		if err := json.Unmarshal(resp, verr); err != nil || len(verr.Errors) == 0 {
 			return created, &StatusError{Status: status}
 		}
 		return created, verr
@@ -187,13 +198,25 @@ func (c *Client) do(ctx context.Context, method, path string, payload []byte) (i
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	return resp.StatusCode, body, err
+}
+
+// decode parses a JSON body, naming the server and status when it is not JSON.
+func (c *Client) decode(status int, body []byte, v any) error {
+	if err := json.Unmarshal(body, v); err != nil {
+		return c.unexpected(status, err)
+	}
+	return nil
+}
+
+func (c *Client) unexpected(status int, err error) error {
+	return fmt.Errorf("unexpected response from %s (status %d): %w", c.BaseURL, status, err)
 }
 
 func (c *Client) httpClient() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
-	return &http.Client{Timeout: 15 * time.Second}
+	return &http.Client{Timeout: defaultTimeout}
 }

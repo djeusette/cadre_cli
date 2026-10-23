@@ -23,6 +23,7 @@ type harness struct {
 	errb    *strings.Builder
 	cfgPath string
 	opened  []string
+	sleeps  []time.Duration
 }
 
 func newHarness(t *testing.T, srv *httptest.Server, cfg *config.Config) *harness {
@@ -47,7 +48,7 @@ func newHarness(t *testing.T, srv *httptest.Server, cfg *config.Config) *harness
 			return ""
 		},
 		OpenBrowser: func(u string) error { h.opened = append(h.opened, u); return nil },
-		Sleep:       func(time.Duration) {},
+		Sleep:       func(d time.Duration) { h.sleeps = append(h.sleeps, d) },
 		HTTP:        srv.Client(),
 		Version:     "1.2.3",
 	}
@@ -70,12 +71,17 @@ func writeJSON(w http.ResponseWriter, status int, body string) {
 
 func loginServer(t *testing.T, expiresIn int, redeem func(n int, w http.ResponseWriter)) (*httptest.Server, *int32) {
 	t.Helper()
+	return loginServerWithURI(t, expiresIn, func(base string) string { return base + "/cli/authorize?code=ABCD-EFGH" }, redeem)
+}
+
+func loginServerWithURI(t *testing.T, expiresIn int, uriFor func(base string) string, redeem func(n int, w http.ResponseWriter)) (*httptest.Server, *int32) {
+	t.Helper()
 	var polls int32
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/cli/logins":
-			writeJSON(w, 201, `{"user_code":"ABCD-EFGH","device_code":"dev","verification_uri":"`+srv.URL+`/cli/authorize?code=ABCD-EFGH","expires_in":`+strconv.Itoa(expiresIn)+`,"interval":2}`)
+			writeJSON(w, 201, `{"user_code":"ABCD-EFGH","device_code":"dev","verification_uri":"`+uriFor(srv.URL)+`","expires_in":`+strconv.Itoa(expiresIn)+`,"interval":2}`)
 		case "/api/cli/logins/redeem":
 			redeem(int(atomic.AddInt32(&polls, 1)), w)
 		default:
@@ -114,6 +120,80 @@ func TestLoginSavesKeyAfterApproval(t *testing.T) {
 	}
 	if strings.Contains(h.out.String()+h.errb.String(), "cadre_abc") {
 		t.Error("key was printed")
+	}
+	if len(h.sleeps) != 3 || h.sleeps[0] != 2*time.Second {
+		t.Errorf("sleeps = %v, want three of 2s", h.sleeps)
+	}
+	assertMode(t, h.cfgPath, 0o600)
+	assertMode(t, filepath.Dir(h.cfgPath), 0o700)
+}
+
+func assertMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Errorf("%s mode = %o, want %o", path, got, want)
+	}
+}
+
+func TestLoginOpensOnlyTheServersOwnURL(t *testing.T) {
+	approve := func(_ int, w http.ResponseWriter) {
+		writeJSON(w, 200, `{"api_key":"k","email":"ada@colette.club","expires_at":"x"}`)
+	}
+	tests := []struct {
+		name     string
+		uriFor   func(base string) string
+		wantOpen bool
+	}{
+		{"base host", func(b string) string { return b + "/cli/authorize?code=ABCD-EFGH" }, true},
+		{"file scheme", func(string) string { return "file:///etc/passwd" }, false},
+		{"custom scheme", func(b string) string { return "vscode://" + strings.TrimPrefix(b, "http://") }, false},
+		{"other host", func(string) string { return "http://evil.example/cli/authorize" }, false},
+		{"other port", func(string) string { return "http://127.0.0.1:1/cli/authorize" }, false},
+		{"userinfo", func(b string) string { return "http://user:pw@" + strings.TrimPrefix(b, "http://") + "/x" }, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _ := loginServerWithURI(t, 600, tt.uriFor, approve)
+			h := newHarness(t, srv, nil)
+			uri := tt.uriFor(srv.URL)
+
+			if code := cli.Run([]string{"login"}, h.deps); code != 0 {
+				t.Fatalf("code = %d, stderr %q", code, h.errb)
+			}
+			if !strings.Contains(h.out.String(), "Opening "+uri+" in your browser.") {
+				t.Errorf("stdout = %q", h.out)
+			}
+			if tt.wantOpen {
+				if len(h.opened) != 1 || h.opened[0] != uri {
+					t.Errorf("opened = %v", h.opened)
+				}
+				return
+			}
+			if len(h.opened) != 0 {
+				t.Errorf("opened = %v, want none", h.opened)
+			}
+			if !strings.Contains(h.errb.String(), "Not opening an unexpected URL: "+uri) {
+				t.Errorf("stderr = %q", h.errb)
+			}
+		})
+	}
+}
+
+func TestLoginRejectsAnswerWithoutKey(t *testing.T) {
+	srv, _ := loginServer(t, 600, func(_ int, w http.ResponseWriter) {
+		writeJSON(w, 200, `{"api_key":"","email":"ada@colette.club","expires_at":"x"}`)
+	})
+	h := newHarness(t, srv, nil)
+
+	if code := cli.Run([]string{"login"}, h.deps); code != 1 {
+		t.Fatalf("code = %d", code)
+	}
+	if strings.Contains(h.out.String(), "Signed in") || h.load(t).APIKey != "" {
+		t.Errorf("stdout = %q, config = %+v", h.out, h.load(t))
 	}
 }
 
@@ -176,6 +256,9 @@ func meServer(t *testing.T, status int, body string) *httptest.Server {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/me" || r.Header.Get("Authorization") != "Bearer cadre_abc" {
 			t.Errorf("bad request %s %q", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		if ua := r.Header.Get("User-Agent"); ua != "cadre-cli/1.2.3" {
+			t.Errorf("User-Agent = %q", ua)
 		}
 		writeJSON(w, status, body)
 	}))
@@ -297,6 +380,27 @@ func TestProjectCreateValidation(t *testing.T) {
 	}
 	if want := "name: is required\nmilestones.1.repos.0: is invalid\n"; h.errb.String() != want {
 		t.Errorf("stderr = %q, want %q", h.errb, want)
+	}
+}
+
+func TestProjectCreateEmptyValidationErrorsFailsGenerically(t *testing.T) {
+	var got string
+	srv := projectServer(t, 422, `{"errors":[]}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"project", "create", writeFile(t, "{}")}, h.deps); code != 1 || !strings.Contains(h.errb.String(), "422") {
+		t.Errorf("code = %d, stderr %q", code, h.errb)
+	}
+}
+
+func TestProjectCreateNonJSONResponse(t *testing.T) {
+	var got string
+	srv := projectServer(t, 201, `<html>proxy</html>`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	code := cli.Run([]string{"project", "create", writeFile(t, "{}")}, h.deps)
+	if code != 1 || !strings.Contains(h.errb.String(), "unexpected response from "+srv.URL+" (status 201)") || strings.Contains(h.errb.String(), "cadre_abc") {
+		t.Errorf("code = %d, stderr %q", code, h.errb)
 	}
 }
 
