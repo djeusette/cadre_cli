@@ -1,0 +1,26 @@
+version: 2
+project_name: cadre
+
+builds:
+  - main: ./cmd/cadre
+    binary: cadre
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ title .Os }}_{{ if eq .Arch "amd64" }}x86_64{{ else if and (eq .Os "linux") (eq .Arch "arm64") }}aarch64{{ else }}{{ .Arch }}{{ end }}
+
+release:
+  github:
+    owner: colette-club
+    name: cadre
