@@ -31,6 +31,9 @@ func newHarness(t *testing.T, srv *httptest.Server, cfg *config.Config) *harness
 	dir := t.TempDir()
 	h := &harness{out: &strings.Builder{}, errb: &strings.Builder{}, cfgPath: filepath.Join(dir, "cadre", "config.json")}
 	if cfg != nil {
+		if cfg.URL == "" {
+			cfg.URL = srv.URL
+		}
 		if err := config.Save(h.cfgPath, *cfg); err != nil {
 			t.Fatal(err)
 		}
@@ -444,5 +447,60 @@ func TestProjectCreateUsage(t *testing.T) {
 
 	if code := cli.Run([]string{"project", "create"}, h.deps); code != 2 || !strings.Contains(h.errb.String(), "Usage: cadre") {
 		t.Errorf("code = %d, stderr %q", code, h.errb)
+	}
+}
+
+func TestKeyIsNotSentToAnotherServer(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		if r.Header.Get("Authorization") != "" {
+			t.Errorf("key sent to %s: %q", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		writeJSON(w, 200, `{}`)
+	}))
+	t.Cleanup(srv.Close)
+	stored := &config.Config{URL: "https://issuer.example", APIKey: "cadre_abc"}
+
+	h := newHarness(t, srv, stored)
+	if code := cli.Run([]string{"whoami"}, h.deps); code != 1 || !strings.Contains(h.errb.String(), "Not signed in. Run cadre login.") {
+		t.Errorf("whoami: code = %d, stderr %q", code, h.errb)
+	}
+
+	h = newHarness(t, srv, stored)
+	if code := cli.Run([]string{"project", "create", writeFile(t, "{}")}, h.deps); code != 1 || !strings.Contains(h.errb.String(), "Not signed in. Run cadre login.") {
+		t.Errorf("project create: code = %d, stderr %q", code, h.errb)
+	}
+	if n := atomic.LoadInt32(&hits); n != 0 {
+		t.Errorf("server was called %d times", n)
+	}
+}
+
+func TestLoginOnAnotherServerReplacesTheStoredURL(t *testing.T) {
+	srv, _ := loginServer(t, 600, func(n int, w http.ResponseWriter) {
+		writeJSON(w, 200, `{"api_key":"cadre_new","email":"ada@colette.club","expires_at":"2027-01-01T00:00:00Z"}`)
+	})
+	h := newHarness(t, srv, &config.Config{URL: "https://issuer.example", APIKey: "cadre_old"})
+
+	if code := cli.Run([]string{"login"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if got := h.load(t); got != (config.Config{URL: srv.URL, APIKey: "cadre_new", Email: "ada@colette.club"}) {
+		t.Errorf("config = %+v", got)
+	}
+}
+
+func TestProjectCreateRefusesInvalidJSON(t *testing.T) {
+	var got string
+	srv := projectServer(t, 201, `{}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	file := writeFile(t, `{"name": `)
+
+	if code := cli.Run([]string{"project", "create", file}, h.deps); code != 1 ||
+		!strings.Contains(h.errb.String(), file) || !strings.Contains(h.errb.String(), "not valid JSON") {
+		t.Errorf("code = %d, stderr %q", code, h.errb)
+	}
+	if got != "" {
+		t.Errorf("a request was sent: %q", got)
 	}
 }

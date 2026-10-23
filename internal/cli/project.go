@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 )
@@ -10,6 +11,9 @@ func createProject(ctx context.Context, s *session, args []string) int {
 	body, err := os.ReadFile(args[0])
 	if err != nil {
 		return fail(s.env, fmt.Errorf("cannot read %s: %w", args[0], err))
+	}
+	if !json.Valid(body) {
+		return fail(s.env, fmt.Errorf("%s is not valid JSON", args[0]))
 	}
 	if !s.requireKey() {
 		return 1

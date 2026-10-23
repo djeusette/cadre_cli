@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/colette-club/cadre/cli/internal/api"
 	"github.com/colette-club/cadre/cli/internal/config"
@@ -52,12 +53,21 @@ func runCommand(env Env, asJSON bool, args []string, wantArgs int, cmd command) 
 		baseURL: baseURL,
 		client: &api.Client{
 			BaseURL:   baseURL,
-			APIKey:    cfg.APIKey,
+			APIKey:    keyFor(cfg, baseURL),
 			UserAgent: "cadre-cli/" + env.Version,
 			HTTP:      env.HTTP,
 		},
 	}
 	return cmd(context.Background(), s, args)
+}
+
+// keyFor returns the stored API key only when baseURL is the server that issued it,
+// so a different CADRE_URL never receives the key.
+func keyFor(cfg config.Config, baseURL string) string {
+	if strings.TrimRight(cfg.URL, "/") != baseURL {
+		return ""
+	}
+	return cfg.APIKey
 }
 
 // progress is where status lines go: stdout, or stderr when stdout carries JSON.
@@ -68,9 +78,9 @@ func (s *session) progress() io.Writer {
 	return s.env.Stdout
 }
 
-// requireKey reports whether the config holds an API key, and says so if not.
+// requireKey reports whether there is an API key for the server in use, and says so if not.
 func (s *session) requireKey() bool {
-	if s.cfg.APIKey == "" {
+	if s.client.APIKey == "" {
 		fmt.Fprintln(s.env.Stderr, msgNotSignedIn)
 		return false
 	}

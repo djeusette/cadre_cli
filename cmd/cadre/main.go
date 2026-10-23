@@ -1,7 +1,6 @@
 package main
 
 import (
-	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
@@ -20,7 +19,6 @@ func main() {
 		Getenv:      os.Getenv,
 		OpenBrowser: openBrowser,
 		Sleep:       time.Sleep,
-		HTTP:        &http.Client{Timeout: 30 * time.Second},
 		Version:     version,
 	}
 	os.Exit(cli.Run(os.Args[1:], env))
