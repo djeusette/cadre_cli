@@ -22,6 +22,7 @@ type Env struct {
 
 // Run executes the command in args and returns the exit code: 0 ok, 1 failure, 2 usage error.
 func Run(args []string, env Env) int {
+	args, asJSON := splitJSONFlag(args)
 	if len(args) == 0 {
 		return usageError(env)
 	}
@@ -30,9 +31,32 @@ func Run(args []string, env Env) int {
 	case "version":
 		fmt.Fprintf(env.Stdout, "cadre %s\n", env.Version)
 		return 0
+	case "login":
+		return runCommand(env, asJSON, args[1:], 0, login)
+	case "whoami":
+		return runCommand(env, asJSON, args[1:], 0, whoami)
+	case "project":
+		if len(args) < 2 || args[1] != "create" {
+			return usageError(env)
+		}
+		return runCommand(env, asJSON, args[2:], 1, createProject)
 	default:
 		return usageError(env)
 	}
+}
+
+// splitJSONFlag removes the global --json flag from args wherever it appears.
+func splitJSONFlag(args []string) ([]string, bool) {
+	rest := make([]string, 0, len(args))
+	asJSON := false
+	for _, a := range args {
+		if a == "--json" {
+			asJSON = true
+			continue
+		}
+		rest = append(rest, a)
+	}
+	return rest, asJSON
 }
 
 func usageError(env Env) int {
