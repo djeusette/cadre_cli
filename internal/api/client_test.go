@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/colette-club/cadre/cli/internal/api"
 )
@@ -24,6 +25,55 @@ func reply(status int, body string) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(status)
 		io.WriteString(w, body)
+	}
+}
+
+func rateLimited(retryAfter string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		if retryAfter != "" {
+			w.Header().Set("Retry-After", retryAfter)
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+		io.WriteString(w, `{"error":"rate_limited"}`)
+	}
+}
+
+func TestEveryCallMapsTooManyRequests(t *testing.T) {
+	ctx := context.Background()
+	calls := map[string]func(*api.Client) error{
+		"start login":    func(c *api.Client) error { _, err := c.StartLogin(ctx); return err },
+		"redeem login":   func(c *api.Client) error { _, err := c.RedeemLogin(ctx, "dev"); return err },
+		"me":             func(c *api.Client) error { _, err := c.Me(ctx); return err },
+		"create project": func(c *api.Client) error { _, err := c.CreateProject(ctx, []byte(`{}`)); return err },
+	}
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) {
+			c := newClient(t, rateLimited("30"))
+			var limited *api.RateLimitedError
+			if err := call(c); !errors.As(err, &limited) || limited.RetryAfter != 30*time.Second {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+}
+
+func TestTooManyRequestsWithoutUsableRetryAfter(t *testing.T) {
+	for _, header := range []string{"", "soon", "-5", "Wed, 21 Oct 2026 07:28:00 GMT"} {
+		c := newClient(t, rateLimited(header))
+		_, err := c.Me(context.Background())
+		var limited *api.RateLimitedError
+		if !errors.As(err, &limited) || limited.RetryAfter != 0 {
+			t.Errorf("Retry-After %q: err = %v", header, err)
+		}
+	}
+}
+
+func TestTooManyRequestsCapsRetryAfterAtADay(t *testing.T) {
+	c := newClient(t, rateLimited("99999999999999"))
+	_, err := c.Me(context.Background())
+	var limited *api.RateLimitedError
+	if !errors.As(err, &limited) || limited.RetryAfter != 24*time.Hour {
+		t.Fatalf("err = %v", err)
 	}
 }
 

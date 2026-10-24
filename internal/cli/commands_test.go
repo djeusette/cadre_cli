@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -239,6 +240,77 @@ func TestLoginStopsAtExpiresIn(t *testing.T) {
 	}
 }
 
+func TestLoginWaitsWhenRedeemIsRateLimited(t *testing.T) {
+	srv, polls := loginServer(t, 600, func(n int, w http.ResponseWriter) {
+		switch n {
+		case 1:
+			w.Header().Set("Retry-After", "5")
+			writeJSON(w, 429, `{"error":"rate_limited"}`)
+		case 2:
+			writeJSON(w, 429, `{"error":"rate_limited"}`)
+		default:
+			writeJSON(w, 200, `{"api_key":"cadre_abc","email":"ada@colette.club","expires_at":"x"}`)
+		}
+	})
+	h := newHarness(t, srv, nil)
+
+	if code := cli.Run([]string{"login"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if *polls != 3 {
+		t.Errorf("polls = %d, want 3", *polls)
+	}
+	if want := []time.Duration{2 * time.Second, 5 * time.Second, 2 * time.Second}; !slices.Equal(h.sleeps, want) {
+		t.Errorf("sleeps = %v, want %v", h.sleeps, want)
+	}
+	for _, line := range []string{
+		"Too many requests from this address. Checking again in 5s.\n",
+		"Too many requests from this address. Checking again in 2s.\n",
+		"Signed in as ada@colette.club.\n",
+	} {
+		if !strings.Contains(h.out.String(), line) {
+			t.Errorf("stdout = %q, want it to contain %q", h.out, line)
+		}
+	}
+}
+
+func TestLoginRateLimitedUntilTheCodeExpires(t *testing.T) {
+	srv, polls := loginServer(t, 10, func(_ int, w http.ResponseWriter) {
+		w.Header().Set("Retry-After", "4")
+		writeJSON(w, 429, `{"error":"rate_limited"}`)
+	})
+	h := newHarness(t, srv, nil)
+
+	if code := cli.Run([]string{"login"}, h.deps); code != 1 {
+		t.Fatalf("code = %d", code)
+	}
+	if *polls != 3 {
+		t.Errorf("polls = %d, want 3", *polls)
+	}
+	if want := []time.Duration{2 * time.Second, 4 * time.Second, 4 * time.Second}; !slices.Equal(h.sleeps, want) {
+		t.Errorf("sleeps = %v, want %v", h.sleeps, want)
+	}
+	if !strings.Contains(h.errb.String(), expiredCopy) {
+		t.Errorf("stderr = %q", h.errb)
+	}
+}
+
+func TestLoginStartRateLimited(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "30")
+		writeJSON(w, 429, `{"error":"rate_limited"}`)
+	}))
+	t.Cleanup(srv.Close)
+	h := newHarness(t, srv, nil)
+
+	if code := cli.Run([]string{"login"}, h.deps); code != 1 {
+		t.Fatalf("code = %d", code)
+	}
+	if want := "Too many requests to " + srv.URL + " from this address. Try again in 30s.\n"; h.errb.String() != want {
+		t.Errorf("stderr = %q, want %q", h.errb, want)
+	}
+}
+
 func TestLoginWhenBrowserFails(t *testing.T) {
 	srv, _ := loginServer(t, 600, func(_ int, w http.ResponseWriter) {
 		writeJSON(w, 200, `{"api_key":"k","email":"ada@colette.club","expires_at":"x"}`)
@@ -299,6 +371,18 @@ func TestWhoamiNotSignedIn(t *testing.T) {
 	}
 	if !strings.Contains(h.errb.String(), "Not signed in. Run cadre login.") {
 		t.Errorf("stderr = %q", h.errb)
+	}
+}
+
+func TestWhoamiRateLimited(t *testing.T) {
+	srv := meServer(t, 429, `{"error":"rate_limited"}`)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"whoami"}, h.deps); code != 1 {
+		t.Fatalf("code = %d", code)
+	}
+	if want := "Too many requests to " + srv.URL + " from this address. Try again later.\n"; h.errb.String() != want {
+		t.Errorf("stderr = %q, want %q", h.errb, want)
 	}
 }
 

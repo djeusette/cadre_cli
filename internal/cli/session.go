@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/colette-club/cadre/cli/internal/api"
 	"github.com/colette-club/cadre/cli/internal/config"
@@ -90,9 +91,12 @@ func (s *session) requireKey() bool {
 // failAPI prints a failed API call to stderr and returns exit code 1.
 func (s *session) failAPI(err error) int {
 	var verr *api.ValidationError
+	var limited *api.RateLimitedError
 	switch {
 	case errors.Is(err, api.ErrUnauthorized):
 		fmt.Fprintln(s.env.Stderr, msgKeyInvalid)
+	case errors.As(err, &limited):
+		fmt.Fprintf(s.env.Stderr, "Too many requests to %s from this address. %s\n", s.baseURL, tryAgain(limited.RetryAfter))
 	case errors.As(err, &verr):
 		for _, fe := range verr.Errors {
 			fmt.Fprintf(s.env.Stderr, "%s: %s\n", fe.Path, fe.Message)
@@ -101,6 +105,14 @@ func (s *session) failAPI(err error) int {
 		fmt.Fprintf(s.env.Stderr, "Could not complete the request to %s: %v\n", s.baseURL, err)
 	}
 	return 1
+}
+
+// tryAgain says when to retry, or only that it can be retried when the server did not say.
+func tryAgain(after time.Duration) string {
+	if after <= 0 {
+		return "Try again later."
+	}
+	return fmt.Sprintf("Try again in %s.", after)
 }
 
 func fail(env Env, err error) int {

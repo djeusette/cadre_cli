@@ -73,19 +73,29 @@ func sameServer(uri, base string) bool {
 	return schemeOK && u.User == nil && u.Host != "" && u.Host == b.Host
 }
 
-// pollForApproval redeems the device code every interval until it is approved,
-// gone, or expires_in seconds have passed in total (then it returns api.ErrExpired).
+// pollForApproval redeems the device code every interval until it is approved or gone.
+// When the server rate limits it, it waits as long as the server asks, at least one
+// interval, and goes on. Once expires_in seconds of waiting are spent it returns api.ErrExpired.
 func pollForApproval(ctx context.Context, s *session, started api.Login) (api.Redeemed, error) {
 	interval := time.Duration(started.Interval) * time.Second
 	if interval <= 0 {
 		interval = defaultPollInterval
 	}
-	polls := time.Duration(started.ExpiresIn) * time.Second / interval
+	remaining := time.Duration(started.ExpiresIn) * time.Second
 
-	for range polls {
-		s.env.Sleep(interval)
+	for wait := interval; wait <= remaining; {
+		s.env.Sleep(wait)
+		remaining -= wait
+
 		redeemed, err := s.client.RedeemLogin(ctx, started.DeviceCode)
-		if !errors.Is(err, api.ErrPending) {
+		var limited *api.RateLimitedError
+		switch {
+		case errors.Is(err, api.ErrPending):
+			wait = interval
+		case errors.As(err, &limited):
+			wait = max(limited.RetryAfter, interval)
+			fmt.Fprintf(s.progress(), "Too many requests from this address. Checking again in %s.\n", wait)
+		default:
 			return redeemed, err
 		}
 	}

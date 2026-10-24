@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -29,6 +30,17 @@ type StatusError struct{ Status int }
 
 func (e *StatusError) Error() string {
 	return fmt.Sprintf("the server answered with an unexpected status %d", e.Status)
+}
+
+// RateLimitedError is the server's 429: this address sent too many requests.
+// RetryAfter is how long the server asks to wait, or zero when it did not say.
+type RateLimitedError struct{ RetryAfter time.Duration }
+
+func (e *RateLimitedError) Error() string {
+	if e.RetryAfter <= 0 {
+		return "too many requests"
+	}
+	return fmt.Sprintf("too many requests; retry after %s", e.RetryAfter)
 }
 
 // FieldError is one rejected field of a request.
@@ -82,6 +94,7 @@ type Created struct {
 const (
 	maxResponseBytes = 1 << 20
 	defaultTimeout   = 15 * time.Second
+	maxRetryAfter    = 24 * time.Hour
 )
 
 // Client talks to one Cadre server. APIKey may be empty for the login calls.
@@ -180,6 +193,7 @@ func (c *Client) CreateProject(ctx context.Context, body []byte) (Created, error
 }
 
 // do sends one request and returns the status and body. The key goes only in the Authorization header.
+// A 429 also returns a *RateLimitedError, whatever the call.
 func (c *Client) do(ctx context.Context, method, path string, payload []byte) (int, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.BaseURL, "/")+path, bytes.NewReader(payload))
 	if err != nil {
@@ -199,7 +213,19 @@ func (c *Client) do(ctx context.Context, method, path string, payload []byte) (i
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	if err == nil && resp.StatusCode == http.StatusTooManyRequests {
+		err = &RateLimitedError{RetryAfter: retryAfter(resp.Header.Get("Retry-After"))}
+	}
 	return resp.StatusCode, body, err
+}
+
+// retryAfter reads a Retry-After given in seconds, capped at a day. Any other form is zero.
+func retryAfter(header string) time.Duration {
+	seconds, err := strconv.ParseInt(strings.TrimSpace(header), 10, 64)
+	if err != nil || seconds < 0 {
+		return 0
+	}
+	return time.Duration(min(seconds, int64(maxRetryAfter/time.Second))) * time.Second
 }
 
 // decode parses a JSON body, naming the server and status when it is not JSON.
