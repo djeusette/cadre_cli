@@ -22,5 +22,5 @@ archives:
 
 release:
   github:
-    owner: colette-club
-    name: cadre
+    owner: djeusette
+    name: cadre_cli
