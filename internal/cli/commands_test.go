@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/colette-club/cadre/cli/internal/cli"
-	"github.com/colette-club/cadre/cli/internal/config"
+	"github.com/djeusette/cadre_cli/internal/cli"
+	"github.com/djeusette/cadre_cli/internal/config"
 )
 
 type harness struct {

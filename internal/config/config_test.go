@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/colette-club/cadre/cli/internal/config"
+	"github.com/djeusette/cadre_cli/internal/config"
 )
 
 func getenvFrom(m map[string]string) func(string) string {

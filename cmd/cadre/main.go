@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/colette-club/cadre/cli/internal/cli"
+	"github.com/djeusette/cadre_cli/internal/cli"
 )
 
 // version is set by GoReleaser: -X main.version={{.Version}}.

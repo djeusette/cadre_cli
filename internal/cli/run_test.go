@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/colette-club/cadre/cli/internal/cli"
+	"github.com/djeusette/cadre_cli/internal/cli"
 )
 
 func newEnv() (cli.Env, *bytes.Buffer, *bytes.Buffer) {

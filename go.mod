@@ -1,3 +1,3 @@
-module github.com/colette-club/cadre/cli
+module github.com/djeusette/cadre_cli
 
 go 1.27.3

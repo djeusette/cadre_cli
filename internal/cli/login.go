@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/colette-club/cadre/cli/internal/api"
-	"github.com/colette-club/cadre/cli/internal/config"
+	"github.com/djeusette/cadre_cli/internal/api"
+	"github.com/djeusette/cadre_cli/internal/config"
 )
 
 const defaultPollInterval = 2 * time.Second

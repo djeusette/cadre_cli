@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/colette-club/cadre/cli/internal/api"
+	"github.com/djeusette/cadre_cli/internal/api"
 )
 
 func newClient(t *testing.T, handler http.HandlerFunc) *api.Client {
