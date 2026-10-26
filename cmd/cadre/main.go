@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/djeusette/cadre_cli/internal/cli"
+	"github.com/djeusette/cadre_cli/internal/release"
 )
 
 // version is set by GoReleaser: -X main.version={{.Version}}.
@@ -19,6 +20,8 @@ func main() {
 		Getenv:      os.Getenv,
 		OpenBrowser: openBrowser,
 		Sleep:       time.Sleep,
+		GitHubURL:   release.GitHubURL,
+		Executable:  os.Executable,
 		Version:     version,
 	}
 	os.Exit(cli.Run(os.Args[1:], env))

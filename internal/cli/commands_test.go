@@ -587,7 +587,7 @@ func TestLoginRequiresAnHTTPURL(t *testing.T) {
 		writeJSON(w, 500, `{}`)
 	}))
 	t.Cleanup(srv.Close)
-	usage := "Usage: cadre <login --url <url>|whoami|project create <file>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|version> [--json]\n"
+	usage := "Usage: cadre <login --url <url>|whoami|project create <file>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|upgrade|version> [--json]\n"
 
 	for _, args := range [][]string{{"login"}, {"login", "--url"}, {"login", srv.URL}, {"login", "--url", srv.URL, "extra"}} {
 		h := newHarness(t, srv, nil)
@@ -766,7 +766,7 @@ func TestSpecPushUsage(t *testing.T) {
 	}
 	for _, args := range cases {
 		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
-		want := "Usage: cadre <login --url <url>|whoami|project create <file>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|version> [--json]\n"
+		want := "Usage: cadre <login --url <url>|whoami|project create <file>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|upgrade|version> [--json]\n"
 		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != want {
 			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
 		}
@@ -962,7 +962,7 @@ func TestSpecPullUsage(t *testing.T) {
 	}
 	for _, args := range cases {
 		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
-		want := "Usage: cadre <login --url <url>|whoami|project create <file>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|version> [--json]\n"
+		want := "Usage: cadre <login --url <url>|whoami|project create <file>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|upgrade|version> [--json]\n"
 		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != want {
 			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
 		}
