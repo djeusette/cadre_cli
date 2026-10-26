@@ -5,13 +5,55 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/djeusette/cadre_cli/internal/api"
 	"github.com/djeusette/cadre_cli/internal/config"
 )
 
-const defaultPollInterval = 2 * time.Second
+const (
+	defaultPollInterval = 2 * time.Second
+	msgBadURL           = "--url must be an http:// or https:// URL with a host, such as https://cadre.example.com."
+)
+
+// runLogin dispatches `login --url <url>` or `login --url=<url>`. The URL is required:
+// it is the server to sign in to, and login stores it for every other command.
+func runLogin(env Env, asJSON bool, args []string) int {
+	raw, ok := loginURLArg(args)
+	if !ok {
+		return usageError(env)
+	}
+	serverURL, ok := parseServerURL(raw)
+	if !ok {
+		fmt.Fprintln(env.Stderr, msgBadURL)
+		return 2
+	}
+	return runAgainst(env, asJSON, nil, 0, func(config.Config) string { return serverURL }, login)
+}
+
+func loginURLArg(args []string) (string, bool) {
+	switch {
+	case len(args) == 2 && args[0] == "--url":
+		return args[1], true
+	case len(args) == 1 && strings.HasPrefix(args[0], "--url="):
+		return strings.TrimPrefix(args[0], "--url="), true
+	default:
+		return "", false
+	}
+}
+
+// parseServerURL accepts an absolute http(s) URL with a host and no credentials, query or
+// fragment, and returns it without a trailing slash.
+func parseServerURL(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", false
+	}
+	ok := (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.User == nil &&
+		u.RawQuery == "" && !u.ForceQuery && u.Fragment == ""
+	return strings.TrimRight(raw, "/"), ok
+}
 
 func login(ctx context.Context, s *session, _ []string) int {
 	started, err := s.client.StartLogin(ctx)
@@ -27,7 +69,7 @@ func login(ctx context.Context, s *session, _ []string) int {
 	redeemed, err := pollForApproval(ctx, s, started)
 	switch {
 	case errors.Is(err, api.ErrExpired), errors.Is(err, api.ErrNotFound):
-		fmt.Fprintln(s.env.Stderr, msgCodeExpired)
+		fmt.Fprintf(s.env.Stderr, "The code expired. Run cadre login --url %s again.\n", s.baseURL)
 		return 1
 	case err != nil:
 		return s.failAPI(err)
