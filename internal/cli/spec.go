@@ -63,7 +63,8 @@ func runPush(env Env, asJSON bool, args []string) int {
 }
 
 // takeFlag removes the flag name and its value, written `name value` or `name=value`, from args.
-// The value is empty when the flag is absent; ok is false when it has no value or is given twice.
+// The value is empty when the flag is absent; ok is false when its value is missing or empty, or when
+// it is given twice, so an unset shell variable never turns a flag off.
 func takeFlag(args []string, name string) (string, []string, bool) {
 	var value string
 	found := false
@@ -71,7 +72,7 @@ func takeFlag(args []string, name string) (string, []string, bool) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
-		case arg == name && i+1 < len(args) && !found:
+		case arg == name && i+1 < len(args) && args[i+1] != "" && !found:
 			value, found = args[i+1], true
 			i++
 		case strings.HasPrefix(arg, name+"=") && len(arg) > len(name)+1 && !found:
