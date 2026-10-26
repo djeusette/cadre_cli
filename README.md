@@ -16,7 +16,7 @@ Make sure `~/.local/bin` is on your `PATH`, then run `cadre version`.
 ## Quick start
 
 ```bash
-cadre login                       # approve the code in your browser
+cadre login --url https://colette-cadre.fly.dev   # your team's Cadre; approve the code in your browser
 cadre whoami
 cadre project create project.json
 cadre spec push wish-reminders/2 spec.md
@@ -26,7 +26,7 @@ cadre spec push wish-reminders/2 spec.md
 
 | Command | What it does |
 | --- | --- |
-| `cadre login` | Signs in from the browser and stores a personal API key |
+| `cadre login --url <url>` | Signs in to the Cadre at `<url>` from the browser, and stores that URL and a personal API key. The URL is required |
 | `cadre whoami` | Shows the server and the account you're signed in as |
 | `cadre project create <file>` | Registers a project, its milestones and their deploy order, with each milestone's spec and design link and the project's design canvas link when the file has them |
 | `cadre spec push <project>/<n> <file>` | Uploads a markdown file, unchanged, as the newest version of milestone `<n>`'s spec, and prints the project's page |
@@ -36,7 +36,7 @@ Add `--json` to any command for machine-readable output.
 
 ## Configuration
 
-The key and server URL live in `~/.config/cadre/config.json` (mode 0600). `CADRE_URL` overrides the server, which defaults to `https://colette-cadre.fly.dev`.
+`cadre login --url <url>` stores the server URL and the key in `~/.config/cadre/config.json` (mode 0600). Every other command talks to that stored URL and nothing else: there is no default server and no environment override. Before the first login, commands answer `Not signed in. Run cadre login --url <url>.`
 
 ## Development
 

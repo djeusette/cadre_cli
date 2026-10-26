@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const usage = "Usage: cadre <login|whoami|project create <file>|spec push <project>/<n> <file>|version> [--json]"
+const usage = "Usage: cadre <login --url <url>|whoami|project create <file>|spec push <project>/<n> <file>|version> [--json]"
 
 // Env carries everything a command touches outside its arguments, so tests can fake it.
 type Env struct {
@@ -32,7 +32,7 @@ func Run(args []string, env Env) int {
 		fmt.Fprintf(env.Stdout, "cadre %s\n", env.Version)
 		return 0
 	case "login":
-		return runCommand(env, asJSON, args[1:], 0, login)
+		return runLogin(env, asJSON, args[1:])
 	case "whoami":
 		return runCommand(env, asJSON, args[1:], 0, whoami)
 	case "project":

@@ -46,8 +46,6 @@ func newHarness(t *testing.T, srv *httptest.Server, cfg *config.Config) *harness
 			switch k {
 			case "XDG_CONFIG_HOME":
 				return dir
-			case "CADRE_URL":
-				return srv.URL
 			}
 			return ""
 		},
@@ -96,7 +94,9 @@ func loginServerWithURI(t *testing.T, expiresIn int, uriFor func(base string) st
 	return srv, &polls
 }
 
-const expiredCopy = "The code expired. Run cadre login again."
+func expiredCopy(url string) string {
+	return "The code expired. Run cadre login --url " + url + " again."
+}
 
 func TestLoginSavesKeyAfterApproval(t *testing.T) {
 	srv, _ := loginServer(t, 600, func(n int, w http.ResponseWriter) {
@@ -108,7 +108,7 @@ func TestLoginSavesKeyAfterApproval(t *testing.T) {
 	})
 	h := newHarness(t, srv, nil)
 
-	if code := cli.Run([]string{"login"}, h.deps); code != 0 {
+	if code := cli.Run([]string{"login", "--url", srv.URL}, h.deps); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, h.errb)
 	}
 	uri := srv.URL + "/cli/authorize?code=ABCD-EFGH"
@@ -165,7 +165,7 @@ func TestLoginOpensOnlyTheServersOwnURL(t *testing.T) {
 			h := newHarness(t, srv, nil)
 			uri := tt.uriFor(srv.URL)
 
-			if code := cli.Run([]string{"login"}, h.deps); code != 0 {
+			if code := cli.Run([]string{"login", "--url", srv.URL}, h.deps); code != 0 {
 				t.Fatalf("code = %d, stderr %q", code, h.errb)
 			}
 			if !strings.Contains(h.out.String(), "Opening "+uri+" in your browser.") {
@@ -193,7 +193,7 @@ func TestLoginRejectsAnswerWithoutKey(t *testing.T) {
 	})
 	h := newHarness(t, srv, nil)
 
-	if code := cli.Run([]string{"login"}, h.deps); code != 1 {
+	if code := cli.Run([]string{"login", "--url", srv.URL}, h.deps); code != 1 {
 		t.Fatalf("code = %d", code)
 	}
 	if strings.Contains(h.out.String(), "Signed in") || h.load(t).APIKey != "" {
@@ -205,10 +205,10 @@ func TestLoginExpired(t *testing.T) {
 	srv, _ := loginServer(t, 600, func(_ int, w http.ResponseWriter) { writeJSON(w, 410, `{"error":"expired"}`) })
 	h := newHarness(t, srv, nil)
 
-	if code := cli.Run([]string{"login"}, h.deps); code != 1 {
+	if code := cli.Run([]string{"login", "--url", srv.URL}, h.deps); code != 1 {
 		t.Fatalf("code = %d", code)
 	}
-	if !strings.Contains(h.errb.String(), expiredCopy) {
+	if !strings.Contains(h.errb.String(), expiredCopy(srv.URL)) {
 		t.Errorf("stderr = %q", h.errb)
 	}
 	if h.load(t).APIKey != "" {
@@ -220,7 +220,7 @@ func TestLoginNotFoundMeansExpired(t *testing.T) {
 	srv, _ := loginServer(t, 600, func(_ int, w http.ResponseWriter) { writeJSON(w, 404, `{"error":"not_found"}`) })
 	h := newHarness(t, srv, nil)
 
-	if code := cli.Run([]string{"login"}, h.deps); code != 1 || !strings.Contains(h.errb.String(), expiredCopy) {
+	if code := cli.Run([]string{"login", "--url", srv.URL}, h.deps); code != 1 || !strings.Contains(h.errb.String(), expiredCopy(srv.URL)) {
 		t.Errorf("code = %d, stderr %q", code, h.errb)
 	}
 }
@@ -229,13 +229,13 @@ func TestLoginStopsAtExpiresIn(t *testing.T) {
 	srv, polls := loginServer(t, 4, func(_ int, w http.ResponseWriter) { writeJSON(w, 202, `{"status":"pending"}`) })
 	h := newHarness(t, srv, nil)
 
-	if code := cli.Run([]string{"login"}, h.deps); code != 1 {
+	if code := cli.Run([]string{"login", "--url", srv.URL}, h.deps); code != 1 {
 		t.Fatalf("code = %d", code)
 	}
 	if *polls != 2 {
 		t.Errorf("polls = %d, want 2", *polls)
 	}
-	if !strings.Contains(h.errb.String(), expiredCopy) {
+	if !strings.Contains(h.errb.String(), expiredCopy(srv.URL)) {
 		t.Errorf("stderr = %q", h.errb)
 	}
 }
@@ -254,7 +254,7 @@ func TestLoginWaitsWhenRedeemIsRateLimited(t *testing.T) {
 	})
 	h := newHarness(t, srv, nil)
 
-	if code := cli.Run([]string{"login"}, h.deps); code != 0 {
+	if code := cli.Run([]string{"login", "--url", srv.URL}, h.deps); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, h.errb)
 	}
 	if *polls != 3 {
@@ -281,7 +281,7 @@ func TestLoginRateLimitedUntilTheCodeExpires(t *testing.T) {
 	})
 	h := newHarness(t, srv, nil)
 
-	if code := cli.Run([]string{"login"}, h.deps); code != 1 {
+	if code := cli.Run([]string{"login", "--url", srv.URL}, h.deps); code != 1 {
 		t.Fatalf("code = %d", code)
 	}
 	if *polls != 3 {
@@ -290,7 +290,7 @@ func TestLoginRateLimitedUntilTheCodeExpires(t *testing.T) {
 	if want := []time.Duration{2 * time.Second, 4 * time.Second, 4 * time.Second}; !slices.Equal(h.sleeps, want) {
 		t.Errorf("sleeps = %v, want %v", h.sleeps, want)
 	}
-	if !strings.Contains(h.errb.String(), expiredCopy) {
+	if !strings.Contains(h.errb.String(), expiredCopy(srv.URL)) {
 		t.Errorf("stderr = %q", h.errb)
 	}
 }
@@ -303,7 +303,7 @@ func TestLoginStartRateLimited(t *testing.T) {
 	t.Cleanup(srv.Close)
 	h := newHarness(t, srv, nil)
 
-	if code := cli.Run([]string{"login"}, h.deps); code != 1 {
+	if code := cli.Run([]string{"login", "--url", srv.URL}, h.deps); code != 1 {
 		t.Fatalf("code = %d", code)
 	}
 	if want := "Too many requests to " + srv.URL + " from this address. Try again in 30s.\n"; h.errb.String() != want {
@@ -318,7 +318,7 @@ func TestLoginWhenBrowserFails(t *testing.T) {
 	h := newHarness(t, srv, nil)
 	h.deps.OpenBrowser = func(string) error { return io.ErrClosedPipe }
 
-	if code := cli.Run([]string{"login"}, h.deps); code != 0 {
+	if code := cli.Run([]string{"login", "--url", srv.URL}, h.deps); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, h.errb)
 	}
 	if !strings.Contains(h.out.String(), "/cli/authorize?code=ABCD-EFGH") {
@@ -369,7 +369,7 @@ func TestWhoamiNotSignedIn(t *testing.T) {
 	if code := cli.Run([]string{"whoami"}, h.deps); code != 1 {
 		t.Fatalf("code = %d", code)
 	}
-	if !strings.Contains(h.errb.String(), "Not signed in. Run cadre login.") {
+	if !strings.Contains(h.errb.String(), "Not signed in. Run cadre login --url <url>.") {
 		t.Errorf("stderr = %q", h.errb)
 	}
 }
@@ -393,7 +393,7 @@ func TestWhoamiInvalidKey(t *testing.T) {
 	if code := cli.Run([]string{"whoami"}, h.deps); code != 1 {
 		t.Fatalf("code = %d", code)
 	}
-	if !strings.Contains(h.errb.String(), "Your key is no longer valid. Run cadre login.") {
+	if !strings.Contains(h.errb.String(), "Your key for "+srv.URL+" is no longer valid. Run cadre login --url "+srv.URL+".") {
 		t.Errorf("stderr = %q", h.errb)
 	}
 }
@@ -497,7 +497,7 @@ func TestProjectCreateInvalidKey(t *testing.T) {
 	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
 
 	if code := cli.Run([]string{"project", "create", writeFile(t, "{}")}, h.deps); code != 1 ||
-		!strings.Contains(h.errb.String(), "Your key is no longer valid. Run cadre login.") {
+		!strings.Contains(h.errb.String(), "Your key for "+srv.URL+" is no longer valid. Run cadre login --url "+srv.URL+".") {
 		t.Errorf("code = %d, stderr %q", code, h.errb)
 	}
 }
@@ -508,7 +508,7 @@ func TestProjectCreateNotSignedIn(t *testing.T) {
 	h := newHarness(t, srv, nil)
 
 	if code := cli.Run([]string{"project", "create", writeFile(t, "{}")}, h.deps); code != 1 ||
-		!strings.Contains(h.errb.String(), "Not signed in. Run cadre login.") {
+		!strings.Contains(h.errb.String(), "Not signed in. Run cadre login --url <url>.") {
 		t.Errorf("code = %d, stderr %q", code, h.errb)
 	}
 }
@@ -534,29 +534,98 @@ func TestProjectCreateUsage(t *testing.T) {
 	}
 }
 
-func TestKeyIsNotSentToAnotherServer(t *testing.T) {
-	var hits int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&hits, 1)
-		if r.Header.Get("Authorization") != "" {
-			t.Errorf("key sent to %s: %q", r.URL.Path, r.Header.Get("Authorization"))
+func TestCommandsUseOnlyTheStoredURL(t *testing.T) {
+	var otherHits int32
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&otherHits, 1)
+		writeJSON(w, 200, `{"email":"eve@evil.example"}`)
+	}))
+	t.Cleanup(other.Close)
+	srv := meServer(t, 200, `{"email":"ada@colette.club"}`)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	h.deps.Getenv = func(k string) string {
+		switch k {
+		case "XDG_CONFIG_HOME":
+			return filepath.Dir(filepath.Dir(h.cfgPath))
+		case "CADRE_URL":
+			return other.URL
 		}
+		return ""
+	}
+
+	if code := cli.Run([]string{"whoami"}, h.deps); code != 0 || h.out.String() != "Signed in to "+srv.URL+" as ada@colette.club.\n" {
+		t.Errorf("code = %d, stdout %q, stderr %q", code, h.out, h.errb)
+	}
+	if n := atomic.LoadInt32(&otherHits); n != 0 {
+		t.Errorf("CADRE_URL's server was called %d times", n)
+	}
+}
+
+func TestNotSignedInWithoutAStoredURL(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
 		writeJSON(w, 200, `{}`)
 	}))
 	t.Cleanup(srv.Close)
-	stored := &config.Config{URL: "https://issuer.example", APIKey: "cadre_abc"}
 
-	h := newHarness(t, srv, stored)
-	if code := cli.Run([]string{"whoami"}, h.deps); code != 1 || !strings.Contains(h.errb.String(), "Not signed in. Run cadre login.") {
-		t.Errorf("whoami: code = %d, stderr %q", code, h.errb)
-	}
-
-	h = newHarness(t, srv, stored)
-	if code := cli.Run([]string{"project", "create", writeFile(t, "{}")}, h.deps); code != 1 || !strings.Contains(h.errb.String(), "Not signed in. Run cadre login.") {
-		t.Errorf("project create: code = %d, stderr %q", code, h.errb)
+	for _, args := range [][]string{{"whoami"}, {"project", "create", writeFile(t, "{}")}, {"spec", "push", "wish-reminders/1", writeSpec(t, "x")}} {
+		h := newHarness(t, srv, nil)
+		if code := cli.Run(args, h.deps); code != 1 || h.errb.String() != "Not signed in. Run cadre login --url <url>.\n" {
+			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
+		}
 	}
 	if n := atomic.LoadInt32(&hits); n != 0 {
-		t.Errorf("server was called %d times", n)
+		t.Errorf("a server was called %d times", n)
+	}
+}
+
+func TestLoginRequiresAnHTTPURL(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		writeJSON(w, 500, `{}`)
+	}))
+	t.Cleanup(srv.Close)
+	usage := "Usage: cadre <login --url <url>|whoami|project create <file>|spec push <project>/<n> <file>|version> [--json]\n"
+
+	for _, args := range [][]string{{"login"}, {"login", "--url"}, {"login", srv.URL}, {"login", "--url", srv.URL, "extra"}} {
+		h := newHarness(t, srv, nil)
+		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != usage {
+			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
+		}
+	}
+	for _, url := range []string{"", "colette-cadre.fly.dev", "ftp://cadre.example", "https://", "https://user:pw@cadre.example", "https://cadre.example/?a=1", "https://cadre.example/#x"} {
+		h := newHarness(t, srv, nil)
+		want := "--url must be an http:// or https:// URL with a host, such as https://cadre.example.com.\n"
+		if code := cli.Run([]string{"login", "--url=" + url}, h.deps); code != 2 || h.errb.String() != want {
+			t.Errorf("%q: code = %d, stderr %q", url, code, h.errb)
+		}
+		if _, err := os.Stat(h.cfgPath); !os.IsNotExist(err) {
+			t.Errorf("%q: config written", url)
+		}
+	}
+	if n := atomic.LoadInt32(&hits); n != 0 {
+		t.Errorf("the server was called %d times", n)
+	}
+}
+
+func TestLoginStoresTheGivenURLWithoutItsTrailingSlash(t *testing.T) {
+	approve := func(_ int, w http.ResponseWriter) {
+		writeJSON(w, 200, `{"api_key":"cadre_abc","email":"ada@colette.club","expires_at":"x"}`)
+	}
+	for _, form := range []func(string) []string{
+		func(u string) []string { return []string{"login", "--url", u + "/"} },
+		func(u string) []string { return []string{"login", "--url=" + u} },
+	} {
+		srv, _ := loginServer(t, 600, approve)
+		h := newHarness(t, srv, nil)
+		if code := cli.Run(form(srv.URL), h.deps); code != 0 {
+			t.Fatalf("code = %d, stderr %q", code, h.errb)
+		}
+		if got := h.load(t); got.URL != srv.URL {
+			t.Errorf("stored URL = %q, want %q", got.URL, srv.URL)
+		}
 	}
 }
 
@@ -566,7 +635,7 @@ func TestLoginOnAnotherServerReplacesTheStoredURL(t *testing.T) {
 	})
 	h := newHarness(t, srv, &config.Config{URL: "https://issuer.example", APIKey: "cadre_old"})
 
-	if code := cli.Run([]string{"login"}, h.deps); code != 0 {
+	if code := cli.Run([]string{"login", "--url", srv.URL}, h.deps); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, h.errb)
 	}
 	if got := h.load(t); got != (config.Config{URL: srv.URL, APIKey: "cadre_new", Email: "ada@colette.club"}) {
@@ -692,7 +761,7 @@ func TestSpecPushUsage(t *testing.T) {
 	}
 	for _, args := range cases {
 		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
-		want := "Usage: cadre <login|whoami|project create <file>|spec push <project>/<n> <file>|version> [--json]\n"
+		want := "Usage: cadre <login --url <url>|whoami|project create <file>|spec push <project>/<n> <file>|version> [--json]\n"
 		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != want {
 			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
 		}
@@ -733,7 +802,7 @@ func TestSpecPushNotSignedIn(t *testing.T) {
 	h := newHarness(t, srv, nil)
 
 	if code := cli.Run([]string{"spec", "push", "wish-reminders/2", writeSpec(t, "x")}, h.deps); code != 1 ||
-		!strings.Contains(h.errb.String(), "Not signed in. Run cadre login.") {
+		!strings.Contains(h.errb.String(), "Not signed in. Run cadre login --url <url>.") {
 		t.Errorf("code = %d, stderr %q", code, h.errb)
 	}
 }
@@ -744,7 +813,7 @@ func TestSpecPushInvalidKey(t *testing.T) {
 	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
 
 	if code := cli.Run([]string{"spec", "push", "wish-reminders/2", writeSpec(t, "x")}, h.deps); code != 1 ||
-		!strings.Contains(h.errb.String(), "Your key is no longer valid. Run cadre login.") {
+		!strings.Contains(h.errb.String(), "Your key for "+srv.URL+" is no longer valid. Run cadre login --url "+srv.URL+".") {
 		t.Errorf("code = %d, stderr %q", code, h.errb)
 	}
 }

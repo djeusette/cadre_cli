@@ -66,16 +66,11 @@ func TestPathHonorsXDG(t *testing.T) {
 	}
 }
 
-func TestBaseURLPrecedence(t *testing.T) {
-	cfg := config.Config{URL: "https://cfg.test/"}
-
-	if got := config.BaseURL(cfg, getenvFrom(map[string]string{"CADRE_URL": "https://env.test/"})); got != "https://env.test" {
-		t.Errorf("env: got %q", got)
+func TestBaseURLIsTheStoredURL(t *testing.T) {
+	if got := config.BaseURL(config.Config{URL: "https://cfg.test/"}); got != "https://cfg.test" {
+		t.Errorf("stored: got %q", got)
 	}
-	if got := config.BaseURL(cfg, getenvFrom(nil)); got != "https://cfg.test" {
-		t.Errorf("config: got %q", got)
-	}
-	if got := config.BaseURL(config.Config{}, getenvFrom(nil)); got != config.DefaultURL {
-		t.Errorf("default: got %q", got)
+	if got := config.BaseURL(config.Config{}); got != "" {
+		t.Errorf("none stored: got %q", got)
 	}
 }

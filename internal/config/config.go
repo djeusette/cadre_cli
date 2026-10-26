@@ -11,9 +11,6 @@ import (
 	"strings"
 )
 
-// DefaultURL is the Cadre server used when neither CADRE_URL nor the config sets one.
-const DefaultURL = "https://colette-cadre.fly.dev"
-
 // Config is the content of the config file.
 type Config struct {
 	URL    string `json:"url"`
@@ -83,15 +80,8 @@ func Save(path string, c Config) error {
 	return os.Rename(tmp.Name(), path)
 }
 
-// BaseURL resolves the server URL: CADRE_URL, then c.URL, then DefaultURL.
-// A trailing slash is trimmed.
-func BaseURL(c Config, getenv func(string) string) string {
-	url := getenv("CADRE_URL")
-	if url == "" {
-		url = c.URL
-	}
-	if url == "" {
-		url = DefaultURL
-	}
-	return strings.TrimRight(url, "/")
+// BaseURL is the server `cadre login --url` stored, without a trailing slash,
+// or "" before any login. Nothing else sets or overrides it.
+func BaseURL(c Config) string {
+	return strings.TrimRight(c.URL, "/")
 }

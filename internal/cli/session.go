@@ -12,11 +12,7 @@ import (
 	"github.com/djeusette/cadre_cli/internal/config"
 )
 
-const (
-	msgNotSignedIn = "Not signed in. Run cadre login."
-	msgKeyInvalid  = "Your key is no longer valid. Run cadre login."
-	msgCodeExpired = "The code expired. Run cadre login again."
-)
+const msgNotSignedIn = "Not signed in. Run cadre login --url <url>."
 
 // session is what a command needs once the config is loaded.
 type session struct {
@@ -30,8 +26,13 @@ type session struct {
 
 type command func(ctx context.Context, s *session, args []string) int
 
-// runCommand checks the argument count, loads the config and runs cmd.
+// runCommand checks the argument count, loads the config and runs cmd against the stored server.
 func runCommand(env Env, asJSON bool, args []string, wantArgs int, cmd command) int {
+	return runAgainst(env, asJSON, args, wantArgs, config.BaseURL, cmd)
+}
+
+// runAgainst is runCommand with the server URL taken from serverURL(config) instead.
+func runAgainst(env Env, asJSON bool, args []string, wantArgs int, serverURL func(config.Config) string, cmd command) int {
 	if len(args) != wantArgs {
 		return usageError(env)
 	}
@@ -45,7 +46,7 @@ func runCommand(env Env, asJSON bool, args []string, wantArgs int, cmd command) 
 		return fail(env, err)
 	}
 
-	baseURL := config.BaseURL(cfg, env.Getenv)
+	baseURL := serverURL(cfg)
 	s := &session{
 		env:     env,
 		asJSON:  asJSON,
@@ -63,7 +64,7 @@ func runCommand(env Env, asJSON bool, args []string, wantArgs int, cmd command) 
 }
 
 // keyFor returns the stored API key only when baseURL is the server that issued it,
-// so a different CADRE_URL never receives the key.
+// so logging in to another server never sends it the key.
 func keyFor(cfg config.Config, baseURL string) string {
 	if strings.TrimRight(cfg.URL, "/") != baseURL {
 		return ""
@@ -81,7 +82,7 @@ func (s *session) progress() io.Writer {
 
 // requireKey reports whether there is an API key for the server in use, and says so if not.
 func (s *session) requireKey() bool {
-	if s.client.APIKey == "" {
+	if s.client.APIKey == "" || s.baseURL == "" {
 		fmt.Fprintln(s.env.Stderr, msgNotSignedIn)
 		return false
 	}
@@ -94,7 +95,7 @@ func (s *session) failAPI(err error) int {
 	var limited *api.RateLimitedError
 	switch {
 	case errors.Is(err, api.ErrUnauthorized):
-		fmt.Fprintln(s.env.Stderr, msgKeyInvalid)
+		fmt.Fprintf(s.env.Stderr, "Your key for %s is no longer valid. Run cadre login --url %s.\n", s.baseURL, s.baseURL)
 	case errors.As(err, &limited):
 		fmt.Fprintf(s.env.Stderr, "Too many requests to %s from this address. %s\n", s.baseURL, tryAgain(limited.RetryAfter))
 	case errors.As(err, &verr):
