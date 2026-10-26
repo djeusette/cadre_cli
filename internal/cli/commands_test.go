@@ -759,6 +759,7 @@ func TestSpecPushUsage(t *testing.T) {
 		{"spec", "push", "wish-reminders/1", file, "--base=v1", "--base", "v2"},
 		{"spec", "push", "wish-reminders/1", file, "--base="},
 		{"spec", "push", "wish-reminders/1", file, "--base", ""},
+		{"spec", "push", "wish-reminders/1", file, "--base", "-v1"},
 		{"spec", "push"},
 		{"spec", "pull", "wish-reminders/1", file},
 		{"spec"},
@@ -955,6 +956,8 @@ func TestSpecPullUsage(t *testing.T) {
 		{"spec", "pull", "wish-reminders/1", "-o"},
 		{"spec", "pull", "wish-reminders/1", "-o="},
 		{"spec", "pull", "wish-reminders/1", "-o", ""},
+		{"spec", "pull", "wish-reminders/1", "-o", "-x"},
+		{"spec", "pull", "wish-reminders/1", "-o=-x"},
 		{"spec", "pull", "wish-reminders/1", "-o", "a.md", "-o", "b.md"},
 	}
 	for _, args := range cases {
