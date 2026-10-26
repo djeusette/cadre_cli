@@ -1,6 +1,6 @@
 # cadre CLI
 
-`cadre` is the command-line client for [Cadre](https://colette-cadre.fly.dev), which shows where every milestone stands, on every repo, in deploy order. People and Claude Code (through the `cadre` skill) use it to sign in and register projects.
+`cadre` is the command-line client for [Cadre](https://colette-cadre.fly.dev), which shows where every milestone stands, on every repo, in deploy order. People and Claude Code (through the `cadre` skill) use it to sign in, register projects and push milestone specs.
 
 ## Install
 
@@ -19,6 +19,7 @@ Make sure `~/.local/bin` is on your `PATH`, then run `cadre version`.
 cadre login                       # approve the code in your browser
 cadre whoami
 cadre project create project.json
+cadre spec push wish-reminders/2 spec.md
 ```
 
 ## Commands
@@ -27,7 +28,8 @@ cadre project create project.json
 | --- | --- |
 | `cadre login` | Signs in from the browser and stores a personal API key |
 | `cadre whoami` | Shows the server and the account you're signed in as |
-| `cadre project create <file>` | Registers a project, its milestones and their deploy order |
+| `cadre project create <file>` | Registers a project, its milestones and their deploy order, with each milestone's spec and design link and the project's design canvas link when the file has them |
+| `cadre spec push <project>/<n> <file>` | Uploads a markdown file, unchanged, as the newest version of milestone `<n>`'s spec, and prints the project's page |
 | `cadre version` | Prints the version |
 
 Add `--json` to any command for machine-readable output.

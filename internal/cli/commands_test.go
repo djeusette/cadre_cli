@@ -588,3 +588,163 @@ func TestProjectCreateRefusesInvalidJSON(t *testing.T) {
 		t.Errorf("a request was sent: %q", got)
 	}
 }
+
+type specRequest struct {
+	method, path, auth string
+	body               map[string]string
+}
+
+func specServer(t *testing.T, status int, body string, got *specRequest) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		*got = specRequest{method: r.Method, path: r.URL.EscapedPath(), auth: r.Header.Get("Authorization")}
+		if err := json.Unmarshal(b, &got.body); err != nil {
+			t.Errorf("body %q: %v", b, err)
+		}
+		writeJSON(w, status, body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func writeSpec(t *testing.T, content string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "spec.md")
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+const pushedBody = `{"slug":"wish-reminders","milestone":2,"url":"https://cadre.example/projects/wish-reminders"}`
+
+func TestSpecPush(t *testing.T) {
+	var got specRequest
+	srv := specServer(t, 200, pushedBody, &got)
+	spec := "# Wish reminders 2\n\n    indented\n"
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"spec", "push", "wish-reminders/2", writeSpec(t, spec)}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Pushed the spec of wish-reminders/2: https://cadre.example/projects/wish-reminders\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+	if got.method != "PUT" || got.path != "/api/projects/wish-reminders/milestones/2/spec" || got.auth != "Bearer cadre_abc" {
+		t.Errorf("request = %+v", got)
+	}
+	if len(got.body) != 1 || got.body["spec"] != spec {
+		t.Errorf("body = %q", got.body)
+	}
+}
+
+func TestSpecPushJSON(t *testing.T) {
+	var got specRequest
+	srv := specServer(t, 200, pushedBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"spec", "push", "wish-reminders/2", writeSpec(t, "x"), "--json"}, h.deps); code != 0 || h.out.String() != pushedBody {
+		t.Errorf("code = %d, stdout = %q, stderr %q", code, h.out, h.errb)
+	}
+}
+
+func TestSpecPushNotFound(t *testing.T) {
+	var got specRequest
+	srv := specServer(t, 404, `{"error":"not_found"}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"spec", "push", "wish-reminders/9", writeSpec(t, "x")}, h.deps); code != 1 {
+		t.Fatalf("code = %d", code)
+	}
+	if want := "No milestone wish-reminders/9 on " + srv.URL + ".\n"; h.errb.String() != want {
+		t.Errorf("stderr = %q, want %q", h.errb, want)
+	}
+}
+
+func TestSpecPushValidation(t *testing.T) {
+	var got specRequest
+	srv := specServer(t, 422, `{"errors":[{"path":"spec","message":"is required"}]}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"spec", "push", "wish-reminders/2", writeSpec(t, "x")}, h.deps); code != 1 || h.errb.String() != "spec: is required\n" {
+		t.Errorf("code = %d, stderr = %q", code, h.errb)
+	}
+}
+
+func TestSpecPushUsage(t *testing.T) {
+	var got specRequest
+	srv := specServer(t, 200, pushedBody, &got)
+	file := writeSpec(t, "x")
+	cases := [][]string{
+		{"spec", "push", "wish-reminders", file},
+		{"spec", "push", "wish-reminders/0", file},
+		{"spec", "push", "wish-reminders/02", file},
+		{"spec", "push", "Wish/1", file},
+		{"spec", "push", "/1", file},
+		{"spec", "push", "a/1/2", file},
+		{"spec", "push", "wish--reminders/1", file},
+		{"spec", "push", "wish-reminders/99999999999999999999", file},
+		{"spec", "push", "wish-reminders/1"},
+		{"spec", "push"},
+		{"spec", "pull", "wish-reminders/1", file},
+		{"spec"},
+	}
+	for _, args := range cases {
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		want := "Usage: cadre <login|whoami|project create <file>|spec push <project>/<n> <file>|version> [--json]\n"
+		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != want {
+			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
+		}
+	}
+	if got.method != "" {
+		t.Errorf("the server was called: %+v", got)
+	}
+}
+
+func TestSpecPushMissingFile(t *testing.T) {
+	var got specRequest
+	srv := specServer(t, 200, pushedBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"spec", "push", "wish-reminders/2", "/nope/missing.md"}, h.deps); code != 1 ||
+		!strings.Contains(h.errb.String(), "/nope/missing.md") {
+		t.Errorf("code = %d, stderr %q", code, h.errb)
+	}
+}
+
+func TestSpecPushNotUTF8(t *testing.T) {
+	var got specRequest
+	srv := specServer(t, 200, pushedBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	file := writeSpec(t, "\xff\xfe")
+
+	if code := cli.Run([]string{"spec", "push", "wish-reminders/2", file}, h.deps); code != 1 || h.errb.String() != file+" is not UTF-8 text.\n" {
+		t.Errorf("code = %d, stderr %q", code, h.errb)
+	}
+	if got.method != "" {
+		t.Errorf("the server was called: %+v", got)
+	}
+}
+
+func TestSpecPushNotSignedIn(t *testing.T) {
+	var got specRequest
+	srv := specServer(t, 200, pushedBody, &got)
+	h := newHarness(t, srv, nil)
+
+	if code := cli.Run([]string{"spec", "push", "wish-reminders/2", writeSpec(t, "x")}, h.deps); code != 1 ||
+		!strings.Contains(h.errb.String(), "Not signed in. Run cadre login.") {
+		t.Errorf("code = %d, stderr %q", code, h.errb)
+	}
+}
+
+func TestSpecPushInvalidKey(t *testing.T) {
+	var got specRequest
+	srv := specServer(t, 401, `{"error":"unauthorized"}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"spec", "push", "wish-reminders/2", writeSpec(t, "x")}, h.deps); code != 1 ||
+		!strings.Contains(h.errb.String(), "Your key is no longer valid. Run cadre login.") {
+		t.Errorf("code = %d, stderr %q", code, h.errb)
+	}
+}
