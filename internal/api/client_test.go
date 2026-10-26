@@ -45,7 +45,8 @@ func TestEveryCallMapsTooManyRequests(t *testing.T) {
 		"redeem login":   func(c *api.Client) error { _, err := c.RedeemLogin(ctx, "dev"); return err },
 		"me":             func(c *api.Client) error { _, err := c.Me(ctx); return err },
 		"create project": func(c *api.Client) error { _, err := c.CreateProject(ctx, []byte(`{}`)); return err },
-		"push spec":      func(c *api.Client) error { _, err := c.PushSpec(ctx, "wish-reminders", 2, "x"); return err },
+		"push spec":      func(c *api.Client) error { _, err := c.PushSpec(ctx, "wish-reminders", 2, "x", ""); return err },
+		"pull spec":      func(c *api.Client) error { _, err := c.PullSpec(ctx, "wish-reminders", 2); return err },
 	}
 	for name, call := range calls {
 		t.Run(name, func(t *testing.T) {
@@ -215,7 +216,7 @@ func TestPushSpecSendsTheSpecExactly(t *testing.T) {
 		io.WriteString(w, `{"slug":"wish-reminders","milestone":2,"url":"https://cadre.example/projects/wish-reminders"}`)
 	})
 
-	got, err := c.PushSpec(context.Background(), "wish-reminders", 2, spec)
+	got, err := c.PushSpec(context.Background(), "wish-reminders", 2, spec, "")
 
 	if err != nil || got.Slug != "wish-reminders" || got.Milestone != 2 || got.URL != "https://cadre.example/projects/wish-reminders" {
 		t.Fatalf("got %+v, %v", got, err)
@@ -234,7 +235,7 @@ func TestPushSpecEscapesTheSlug(t *testing.T) {
 		io.WriteString(w, `{"error":"not_found"}`)
 	})
 
-	if _, err := c.PushSpec(context.Background(), "a/b c", 1, "x"); !errors.Is(err, api.ErrMilestoneNotFound) {
+	if _, err := c.PushSpec(context.Background(), "a/b c", 1, "x", ""); !errors.Is(err, api.ErrMilestoneNotFound) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -246,6 +247,7 @@ func TestPushSpecStatuses(t *testing.T) {
 		check  func(error) bool
 	}{
 		{404, `{"error":"not_found"}`, func(err error) bool { return errors.Is(err, api.ErrMilestoneNotFound) }},
+		{409, `{"error":"spec_changed"}`, func(err error) bool { return errors.Is(err, api.ErrSpecChanged) }},
 		{401, `{"error":"unauthorized"}`, func(err error) bool { return errors.Is(err, api.ErrUnauthorized) }},
 		{422, `{"errors":[{"path":"spec","message":"is required"}]}`, func(err error) bool {
 			var verr *api.ValidationError
@@ -256,7 +258,81 @@ func TestPushSpecStatuses(t *testing.T) {
 	}
 	for _, tc := range cases {
 		c := newClient(t, reply(tc.status, tc.body))
-		if _, err := c.PushSpec(context.Background(), "wish-reminders", 2, "x"); !tc.check(err) {
+		if _, err := c.PushSpec(context.Background(), "wish-reminders", 2, "x", ""); !tc.check(err) {
+			t.Errorf("%d %s: err = %v", tc.status, tc.body, err)
+		}
+	}
+}
+
+func TestPushSpecSendsTheBase(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var body map[string]string
+		if err := json.Unmarshal(b, &body); err != nil || len(body) != 2 || body["spec"] != "x" || body["base_version"] != "v1" {
+			t.Errorf("body = %s (%v)", b, err)
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, `{"slug":"wish-reminders","milestone":2,"url":"https://cadre.example/projects/wish-reminders"}`)
+	})
+
+	if _, err := c.PushSpec(context.Background(), "wish-reminders", 2, "x", "v1"); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+const pulledJSON = `{"slug":"wish-reminders","milestone":2,"url":"https://cadre.example/projects/wish-reminders","spec":"  lead\r\n\n    code\n\n","version":"0c6f6e2a-7a51-4c55-9a6b-2b1f3c4d5e6f","updated_by":"ada@colette.club","updated_at":"2026-10-26T15:00:00.000000Z"}`
+
+func TestPullSpec(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.EscapedPath() != "/api/projects/a%2Fb%20c/milestones/2/spec" ||
+			r.Header.Get("Authorization") != "Bearer cadre_secret" {
+			t.Errorf("bad request: %s %s %v", r.Method, r.URL.EscapedPath(), r.Header)
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, pulledJSON)
+	})
+
+	got, err := c.PullSpec(context.Background(), "a/b c", 2)
+
+	if err != nil || got.Slug != "wish-reminders" || got.Milestone != 2 || got.URL != "https://cadre.example/projects/wish-reminders" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if got.Spec == nil || *got.Spec != "  lead\r\n\n    code\n\n" {
+		t.Errorf("spec = %v", got.Spec)
+	}
+	if got.Version == nil || *got.Version != "0c6f6e2a-7a51-4c55-9a6b-2b1f3c4d5e6f" || got.UpdatedBy == nil || *got.UpdatedBy != "ada@colette.club" ||
+		got.UpdatedAt == nil || *got.UpdatedAt != "2026-10-26T15:00:00.000000Z" {
+		t.Errorf("version = %v, updated_by = %v, updated_at = %v", got.Version, got.UpdatedBy, got.UpdatedAt)
+	}
+	if string(got.Raw) != pulledJSON {
+		t.Errorf("raw = %s", got.Raw)
+	}
+}
+
+func TestPullSpecWithoutASpec(t *testing.T) {
+	c := newClient(t, reply(200, `{"slug":"wish-reminders","milestone":1,"url":"https://cadre.example/projects/wish-reminders","spec":null,"version":null,"updated_by":null,"updated_at":null}`))
+
+	got, err := c.PullSpec(context.Background(), "wish-reminders", 1)
+
+	if err != nil || got.Spec != nil || got.Version != nil || got.UpdatedBy != nil || got.UpdatedAt != nil {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestPullSpecStatuses(t *testing.T) {
+	cases := []struct {
+		status int
+		body   string
+		check  func(error) bool
+	}{
+		{404, `{"error":"not_found"}`, func(err error) bool { return errors.Is(err, api.ErrMilestoneNotFound) }},
+		{401, `{"error":"unauthorized"}`, func(err error) bool { return errors.Is(err, api.ErrUnauthorized) }},
+		{500, `oops`, func(err error) bool { var serr *api.StatusError; return errors.As(err, &serr) && serr.Status == 500 }},
+		{200, `oops`, func(err error) bool { return err != nil && strings.Contains(err.Error(), "status 200") }},
+	}
+	for _, tc := range cases {
+		c := newClient(t, reply(tc.status, tc.body))
+		if _, err := c.PullSpec(context.Background(), "wish-reminders", 2); !tc.check(err) {
 			t.Errorf("%d %s: err = %v", tc.status, tc.body, err)
 		}
 	}

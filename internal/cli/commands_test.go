@@ -587,7 +587,7 @@ func TestLoginRequiresAnHTTPURL(t *testing.T) {
 		writeJSON(w, 500, `{}`)
 	}))
 	t.Cleanup(srv.Close)
-	usage := "Usage: cadre <login --url <url>|whoami|project create <file>|spec push <project>/<n> <file>|version> [--json]\n"
+	usage := "Usage: cadre <login --url <url>|whoami|project create <file>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|version> [--json]\n"
 
 	for _, args := range [][]string{{"login"}, {"login", "--url"}, {"login", srv.URL}, {"login", "--url", srv.URL, "extra"}} {
 		h := newHarness(t, srv, nil)
@@ -755,13 +755,18 @@ func TestSpecPushUsage(t *testing.T) {
 		{"spec", "push", "wish--reminders/1", file},
 		{"spec", "push", "wish-reminders/99999999999999999999", file},
 		{"spec", "push", "wish-reminders/1"},
+		{"spec", "push", "wish-reminders/1", file, "--base"},
+		{"spec", "push", "wish-reminders/1", file, "--base=v1", "--base", "v2"},
+		{"spec", "push", "wish-reminders/1", file, "--base="},
+		{"spec", "push", "wish-reminders/1", file, "--base", ""},
+		{"spec", "push", "wish-reminders/1", file, "--base", "-v1"},
 		{"spec", "push"},
 		{"spec", "pull", "wish-reminders/1", file},
 		{"spec"},
 	}
 	for _, args := range cases {
 		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
-		want := "Usage: cadre <login --url <url>|whoami|project create <file>|spec push <project>/<n> <file>|version> [--json]\n"
+		want := "Usage: cadre <login --url <url>|whoami|project create <file>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|version> [--json]\n"
 		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != want {
 			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
 		}
@@ -815,5 +820,194 @@ func TestSpecPushInvalidKey(t *testing.T) {
 	if code := cli.Run([]string{"spec", "push", "wish-reminders/2", writeSpec(t, "x")}, h.deps); code != 1 ||
 		!strings.Contains(h.errb.String(), "Your key for "+srv.URL+" is no longer valid. Run cadre login --url "+srv.URL+".") {
 		t.Errorf("code = %d, stderr %q", code, h.errb)
+	}
+}
+
+func pullServer(t *testing.T, status int, body string, got *specRequest) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*got = specRequest{method: r.Method, path: r.URL.EscapedPath(), auth: r.Header.Get("Authorization")}
+		writeJSON(w, status, body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+const (
+	pulledSpec   = "  lead\r\n\n    code\n\n"
+	pulledBody   = `{"slug":"wish-reminders","milestone":2,"url":"https://cadre.example/projects/wish-reminders","spec":"  lead\r\n\n    code\n\n","version":"0c6f6e2a-7a51-4c55-9a6b-2b1f3c4d5e6f","updated_by":"ada@colette.club","updated_at":"2026-10-26T15:00:00.000000Z"}`
+	noSpecBody   = `{"slug":"wish-reminders","milestone":2,"url":"https://cadre.example/projects/wish-reminders","spec":null,"version":null,"updated_by":null,"updated_at":null}`
+	specChangedJ = `{"error":"spec_changed"}`
+)
+
+func TestSpecPullToStdout(t *testing.T) {
+	var got specRequest
+	srv := pullServer(t, 200, pulledBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"spec", "pull", "wish-reminders/2"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if h.out.String() != pulledSpec || h.errb.String() != "" {
+		t.Errorf("stdout = %q, stderr = %q", h.out, h.errb)
+	}
+	if got.method != "GET" || got.path != "/api/projects/wish-reminders/milestones/2/spec" || got.auth != "Bearer cadre_abc" {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestSpecPullToFile(t *testing.T) {
+	for _, flag := range [][]string{{"-o", "OUT"}, {"-o=OUT"}} {
+		var got specRequest
+		srv := pullServer(t, 200, pulledBody, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		out := filepath.Join(t.TempDir(), "spec.md")
+		args := []string{"spec", "pull", "wish-reminders/2"}
+		for _, f := range flag {
+			args = append(args, strings.ReplaceAll(f, "OUT", out))
+		}
+
+		if code := cli.Run(args, h.deps); code != 0 {
+			t.Fatalf("%q: code = %d, stderr %q", flag, code, h.errb)
+		}
+		if b, err := os.ReadFile(out); err != nil || string(b) != pulledSpec {
+			t.Errorf("%q: file = %q, %v", flag, b, err)
+		}
+		assertMode(t, out, 0o644)
+		if want := "Pulled the spec of wish-reminders/2 to " + out + ".\n"; h.out.String() != want {
+			t.Errorf("%q: stdout = %q, want %q", flag, h.out, want)
+		}
+	}
+}
+
+func TestSpecPullReplacesAFile(t *testing.T) {
+	var got specRequest
+	srv := pullServer(t, 200, pulledBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	out := writeSpec(t, "an older, longer text that must not survive")
+
+	if code := cli.Run([]string{"spec", "pull", "wish-reminders/2", "-o", out}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if b, _ := os.ReadFile(out); string(b) != pulledSpec {
+		t.Errorf("file = %q", b)
+	}
+}
+
+func TestSpecPullJSON(t *testing.T) {
+	var got specRequest
+	srv := pullServer(t, 200, pulledBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	out := filepath.Join(t.TempDir(), "spec.md")
+
+	if code := cli.Run([]string{"spec", "pull", "wish-reminders/2", "-o", out, "--json"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if h.out.String() != pulledBody {
+		t.Errorf("stdout = %q", h.out)
+	}
+	if want := "Pulled the spec of wish-reminders/2 to " + out + ".\n"; h.errb.String() != want {
+		t.Errorf("stderr = %q, want %q", h.errb, want)
+	}
+	if b, _ := os.ReadFile(out); string(b) != pulledSpec {
+		t.Errorf("file = %q", b)
+	}
+}
+
+func TestSpecPullNoSpec(t *testing.T) {
+	for _, extra := range [][]string{nil, {"--json"}} {
+		var got specRequest
+		srv := pullServer(t, 200, noSpecBody, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		out := filepath.Join(t.TempDir(), "spec.md")
+		args := append([]string{"spec", "pull", "wish-reminders/2", "-o", out}, extra...)
+
+		if code := cli.Run(args, h.deps); code != 1 || h.errb.String() != "wish-reminders/2 has no spec yet.\n" || h.out.String() != "" {
+			t.Errorf("%q: code = %d, stdout = %q, stderr = %q", extra, code, h.out, h.errb)
+		}
+		if _, err := os.Stat(out); !os.IsNotExist(err) {
+			t.Errorf("%q: a file was written: %v", extra, err)
+		}
+	}
+}
+
+func TestSpecPullNotFound(t *testing.T) {
+	var got specRequest
+	srv := pullServer(t, 404, `{"error":"not_found"}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"spec", "pull", "wish-reminders/9"}, h.deps); code != 1 {
+		t.Fatalf("code = %d", code)
+	}
+	if want := "No milestone wish-reminders/9 on " + srv.URL + ".\n"; h.errb.String() != want {
+		t.Errorf("stderr = %q, want %q", h.errb, want)
+	}
+}
+
+func TestSpecPullUsage(t *testing.T) {
+	var got specRequest
+	srv := pullServer(t, 200, pulledBody, &got)
+	cases := [][]string{
+		{"spec", "pull"},
+		{"spec", "pull", "wish-reminders"},
+		{"spec", "pull", "wish-reminders/0"},
+		{"spec", "pull", "Wish/1"},
+		{"spec", "pull", "wish-reminders/1", "extra"},
+		{"spec", "pull", "wish-reminders/1", "-o"},
+		{"spec", "pull", "wish-reminders/1", "-o="},
+		{"spec", "pull", "wish-reminders/1", "-o", ""},
+		{"spec", "pull", "wish-reminders/1", "-o", "-x"},
+		{"spec", "pull", "wish-reminders/1", "-o=-x"},
+		{"spec", "pull", "wish-reminders/1", "-o", "a.md", "-o", "b.md"},
+	}
+	for _, args := range cases {
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		want := "Usage: cadre <login --url <url>|whoami|project create <file>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|version> [--json]\n"
+		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != want {
+			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
+		}
+	}
+	if got.method != "" {
+		t.Errorf("the server was called: %+v", got)
+	}
+}
+
+func TestSpecPullNotSignedIn(t *testing.T) {
+	var got specRequest
+	srv := pullServer(t, 200, pulledBody, &got)
+	h := newHarness(t, srv, nil)
+
+	if code := cli.Run([]string{"spec", "pull", "wish-reminders/2"}, h.deps); code != 1 ||
+		!strings.Contains(h.errb.String(), "Not signed in. Run cadre login --url <url>.") {
+		t.Errorf("code = %d, stderr %q", code, h.errb)
+	}
+}
+
+func TestSpecPushWithBase(t *testing.T) {
+	for _, flag := range [][]string{{"--base", "v1"}, {"--base=v1"}} {
+		var got specRequest
+		srv := specServer(t, 200, pushedBody, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		args := append([]string{"spec", "push", "wish-reminders/2", writeSpec(t, "x")}, flag...)
+
+		if code := cli.Run(args, h.deps); code != 0 {
+			t.Fatalf("%q: code = %d, stderr %q", flag, code, h.errb)
+		}
+		if len(got.body) != 2 || got.body["spec"] != "x" || got.body["base_version"] != "v1" {
+			t.Errorf("%q: body = %q", flag, got.body)
+		}
+	}
+}
+
+func TestSpecPushChanged(t *testing.T) {
+	var got specRequest
+	srv := specServer(t, 409, specChangedJ, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"spec", "push", "wish-reminders/2", writeSpec(t, "x"), "--base", "v1"}, h.deps); code != 1 {
+		t.Fatalf("code = %d", code)
+	}
+	if want := "The spec of wish-reminders/2 changed since you pulled it. Pull it again.\n"; h.errb.String() != want {
+		t.Errorf("stderr = %q, want %q", h.errb, want)
 	}
 }
