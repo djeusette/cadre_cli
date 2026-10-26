@@ -1,6 +1,6 @@
 # cadre CLI
 
-`cadre` is the command-line client for [Cadre](https://colette-cadre.fly.dev), which shows where every milestone stands, on every repo, in deploy order. People and Claude Code (through the `cadre` skill) use it to sign in, register projects and push milestone specs.
+`cadre` is the command-line client for [Cadre](https://colette-cadre.fly.dev), which shows where every milestone stands, on every repo, in deploy order. People and Claude Code (through the `cadre` skill) use it to sign in, register projects, and pull and push milestone specs.
 
 ## Install
 
@@ -19,7 +19,8 @@ Make sure `~/.local/bin` is on your `PATH`, then run `cadre version`.
 cadre login --url https://colette-cadre.fly.dev   # your team's Cadre; approve the code in your browser
 cadre whoami
 cadre project create project.json
-cadre spec push wish-reminders/2 spec.md
+cadre spec pull wish-reminders/2 -o spec.md --json   # note the "version"
+cadre spec push wish-reminders/2 spec.md --base <version>
 ```
 
 ## Commands
@@ -29,7 +30,8 @@ cadre spec push wish-reminders/2 spec.md
 | `cadre login --url <url>` | Signs in to the Cadre at `<url>` from the browser, and stores that URL and a personal API key. The URL is required |
 | `cadre whoami` | Shows the server and the account you're signed in as |
 | `cadre project create <file>` | Registers a project, its milestones and their deploy order, with each milestone's spec and design link and the project's design canvas link when the file has them |
-| `cadre spec push <project>/<n> <file>` | Uploads a markdown file, unchanged, as the newest version of milestone `<n>`'s spec, and prints the project's page |
+| `cadre spec pull <project>/<n> [-o <file>]` | Prints the newest version of milestone `<n>`'s spec exactly as stored, or writes it to `<file>`. With `--json`, prints the answer, whose `version` names that version |
+| `cadre spec push <project>/<n> <file> [--base <version>]` | Uploads a markdown file, unchanged, as the newest version of milestone `<n>`'s spec, and prints the project's page. With `--base`, the push is refused when someone pushed a newer version since that one: pull again |
 | `cadre version` | Prints the version |
 
 Add `--json` to any command for machine-readable output.

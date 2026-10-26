@@ -26,6 +26,8 @@ var (
 	ErrUnauthorized = errors.New("unauthorized")
 	// ErrMilestoneNotFound means no project has the slug, or it has no milestone with the number.
 	ErrMilestoneNotFound = errors.New("milestone not found")
+	// ErrSpecChanged means a push named a base that is no longer the newest version of the spec.
+	ErrSpecChanged = errors.New("spec changed since the base version")
 )
 
 // StatusError is an HTTP status the API contract does not define for the call.
@@ -100,6 +102,19 @@ type Pushed struct {
 	Milestone int    `json:"milestone"`
 	URL       string `json:"url"`
 	Raw       []byte `json:"-"`
+}
+
+// Pulled is a milestone's newest spec version. Spec, Version, UpdatedBy and UpdatedAt are nil when the
+// milestone has no spec. Raw holds the response body as received.
+type Pulled struct {
+	Slug      string  `json:"slug"`
+	Milestone int     `json:"milestone"`
+	URL       string  `json:"url"`
+	Spec      *string `json:"spec"`
+	Version   *string `json:"version"`
+	UpdatedBy *string `json:"updated_by"`
+	UpdatedAt *string `json:"updated_at"`
+	Raw       []byte  `json:"-"`
 }
 
 const (
@@ -200,15 +215,16 @@ func (c *Client) CreateProject(ctx context.Context, body []byte) (Created, error
 }
 
 // PushSpec stores spec, unchanged, as the newest version of the spec of milestone number in the project slug.
-// It returns ErrMilestoneNotFound, ErrUnauthorized or a *ValidationError when the server refuses it.
-func (c *Client) PushSpec(ctx context.Context, slug string, number int, spec string) (Pushed, error) {
+// A non-empty base is the version the spec was edited from: the server refuses the push with ErrSpecChanged
+// when it is no longer the newest. It returns ErrMilestoneNotFound, ErrUnauthorized or a *ValidationError
+// when the server refuses it.
+func (c *Client) PushSpec(ctx context.Context, slug string, number int, spec, base string) (Pushed, error) {
 	var pushed Pushed
-	payload, err := json.Marshal(map[string]string{"spec": spec})
+	payload, err := json.Marshal(pushBody(spec, base))
 	if err != nil {
 		return pushed, err
 	}
-	path := fmt.Sprintf("/api/projects/%s/milestones/%d/spec", url.PathEscape(slug), number)
-	status, resp, err := c.do(ctx, http.MethodPut, path, payload)
+	status, resp, err := c.do(ctx, http.MethodPut, specPath(slug, number), payload)
 	if err != nil {
 		return pushed, err
 	}
@@ -220,11 +236,46 @@ func (c *Client) PushSpec(ctx context.Context, slug string, number int, spec str
 		return pushed, ErrUnauthorized
 	case http.StatusNotFound:
 		return pushed, ErrMilestoneNotFound
+	case http.StatusConflict:
+		return pushed, ErrSpecChanged
 	case http.StatusUnprocessableEntity:
 		return pushed, validationError(status, resp)
 	default:
 		return pushed, &StatusError{Status: status}
 	}
+}
+
+// PullSpec returns the newest version of the spec of milestone number in the project slug.
+// It returns ErrMilestoneNotFound or ErrUnauthorized when the server refuses it.
+func (c *Client) PullSpec(ctx context.Context, slug string, number int) (Pulled, error) {
+	var pulled Pulled
+	status, resp, err := c.do(ctx, http.MethodGet, specPath(slug, number), nil)
+	if err != nil {
+		return pulled, err
+	}
+	switch status {
+	case http.StatusOK:
+		pulled.Raw = resp
+		return pulled, c.decode(status, resp, &pulled)
+	case http.StatusUnauthorized:
+		return pulled, ErrUnauthorized
+	case http.StatusNotFound:
+		return pulled, ErrMilestoneNotFound
+	default:
+		return pulled, &StatusError{Status: status}
+	}
+}
+
+// pushBody is a push's JSON body: the spec, and the base only when there is one.
+func pushBody(spec, base string) map[string]string {
+	if base == "" {
+		return map[string]string{"spec": spec}
+	}
+	return map[string]string{"spec": spec, "base_version": base}
+}
+
+func specPath(slug string, number int) string {
+	return fmt.Sprintf("/api/projects/%s/milestones/%d/spec", url.PathEscape(slug), number)
 }
 
 // validationError reads a 422 body. One with no errors is an unexpected status.
