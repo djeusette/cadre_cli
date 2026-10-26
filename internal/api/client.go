@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,8 @@ var (
 	ErrNotFound = errors.New("login code not found")
 	// ErrUnauthorized means the API key is missing, expired or revoked.
 	ErrUnauthorized = errors.New("unauthorized")
+	// ErrMilestoneNotFound means no project has the slug, or it has no milestone with the number.
+	ErrMilestoneNotFound = errors.New("milestone not found")
 )
 
 // StatusError is an HTTP status the API contract does not define for the call.
@@ -89,6 +92,14 @@ type Created struct {
 	Milestones int    `json:"milestones"`
 	URL        string `json:"url"`
 	Raw        []byte `json:"-"`
+}
+
+// Pushed is a stored spec. Raw holds the response body as received.
+type Pushed struct {
+	Slug      string `json:"slug"`
+	Milestone int    `json:"milestone"`
+	URL       string `json:"url"`
+	Raw       []byte `json:"-"`
 }
 
 const (
@@ -182,14 +193,47 @@ func (c *Client) CreateProject(ctx context.Context, body []byte) (Created, error
 	case http.StatusUnauthorized:
 		return created, ErrUnauthorized
 	case http.StatusUnprocessableEntity:
-		verr := &ValidationError{}
-		if err := json.Unmarshal(resp, verr); err != nil || len(verr.Errors) == 0 {
-			return created, &StatusError{Status: status}
-		}
-		return created, verr
+		return created, validationError(status, resp)
 	default:
 		return created, &StatusError{Status: status}
 	}
+}
+
+// PushSpec stores spec, unchanged, as the newest version of the spec of milestone number in the project slug.
+// It returns ErrMilestoneNotFound, ErrUnauthorized or a *ValidationError when the server refuses it.
+func (c *Client) PushSpec(ctx context.Context, slug string, number int, spec string) (Pushed, error) {
+	var pushed Pushed
+	payload, err := json.Marshal(map[string]string{"spec": spec})
+	if err != nil {
+		return pushed, err
+	}
+	path := fmt.Sprintf("/api/projects/%s/milestones/%d/spec", url.PathEscape(slug), number)
+	status, resp, err := c.do(ctx, http.MethodPut, path, payload)
+	if err != nil {
+		return pushed, err
+	}
+	switch status {
+	case http.StatusOK:
+		pushed.Raw = resp
+		return pushed, c.decode(status, resp, &pushed)
+	case http.StatusUnauthorized:
+		return pushed, ErrUnauthorized
+	case http.StatusNotFound:
+		return pushed, ErrMilestoneNotFound
+	case http.StatusUnprocessableEntity:
+		return pushed, validationError(status, resp)
+	default:
+		return pushed, &StatusError{Status: status}
+	}
+}
+
+// validationError reads a 422 body. One with no errors is an unexpected status.
+func validationError(status int, body []byte) error {
+	verr := &ValidationError{}
+	if err := json.Unmarshal(body, verr); err != nil || len(verr.Errors) == 0 {
+		return &StatusError{Status: status}
+	}
+	return verr
 }
 
 // do sends one request and returns the status and body. The key goes only in the Authorization header.
