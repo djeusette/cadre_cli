@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const usage = "Usage: cadre <login --url <url>|whoami|project create <file>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|upgrade|version> [--json]"
+const usage = "Usage: cadre <login --url <url>|whoami|project create <file>|project pull <slug> [-o <file>]|project update <file>|project archive <slug>|project unarchive <slug>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|upgrade|version> [--json]"
 
 // Env carries everything a command touches outside its arguments, so tests can fake it.
 type Env struct {
@@ -38,10 +38,7 @@ func Run(args []string, env Env) int {
 	case "whoami":
 		return runCommand(env, asJSON, args[1:], 0, whoami)
 	case "project":
-		if len(args) < 2 || args[1] != "create" {
-			return usageError(env)
-		}
-		return runCommand(env, asJSON, args[2:], 1, createProject)
+		return runProject(env, asJSON, args[1:])
 	case "spec":
 		return runSpec(env, asJSON, args[1:])
 	case "upgrade":

@@ -337,3 +337,86 @@ func TestPullSpecStatuses(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectCallsStatuses(t *testing.T) {
+	calls := map[string]func(c *api.Client) error{
+		"pull": func(c *api.Client) error { _, err := c.PullProject(context.Background(), "wish-reminders"); return err },
+		"update": func(c *api.Client) error {
+			_, err := c.UpdateProject(context.Background(), "wish-reminders", []byte(`{}`))
+			return err
+		},
+		"archive": func(c *api.Client) error {
+			_, err := c.ArchiveProject(context.Background(), "wish-reminders")
+			return err
+		},
+		"unarchive": func(c *api.Client) error {
+			_, err := c.UnarchiveProject(context.Background(), "wish-reminders")
+			return err
+		},
+	}
+	for name, call := range calls {
+		cases := []struct {
+			status int
+			body   string
+			check  func(error) bool
+		}{
+			{200, `{"slug":"wish-reminders","name":"W","end_goal":"g","home_repo":"o/r","canvas_url":null,"version":4,"archived":false,"url":"u","milestones":[]}`, func(err error) bool { return err == nil }},
+			{401, `{"error":"unauthorized"}`, func(err error) bool { return errors.Is(err, api.ErrUnauthorized) }},
+			{404, `{"error":"not_found"}`, func(err error) bool { return errors.Is(err, api.ErrProjectNotFound) }},
+			{500, `oops`, func(err error) bool { var serr *api.StatusError; return errors.As(err, &serr) && serr.Status == 500 }},
+		}
+		if name == "update" {
+			cases = append(cases,
+				struct {
+					status int
+					body   string
+					check  func(error) bool
+				}{409, `{"error":"project_changed","version":5}`, func(err error) bool {
+					var cerr *api.ProjectChangedError
+					return errors.As(err, &cerr) && cerr.Version == 5
+				}},
+				struct {
+					status int
+					body   string
+					check  func(error) bool
+				}{409, `{"error":"project_archived"}`, func(err error) bool { return errors.Is(err, api.ErrProjectArchived) }},
+				struct {
+					status int
+					body   string
+					check  func(error) bool
+				}{422, `{"errors":[{"path":"name","message":"is required"}]}`, func(err error) bool {
+					var verr *api.ValidationError
+					return errors.As(err, &verr) && len(verr.Errors) == 1
+				}},
+				struct {
+					status int
+					body   string
+					check  func(error) bool
+				}{409, `{"error":"other"}`, func(err error) bool { var serr *api.StatusError; return errors.As(err, &serr) && serr.Status == 409 }},
+			)
+		}
+		for _, tc := range cases {
+			c := newClient(t, reply(tc.status, tc.body))
+			if err := call(c); !tc.check(err) {
+				t.Errorf("%s %d %s: err = %v", name, tc.status, tc.body, err)
+			}
+		}
+	}
+}
+
+func TestProjectCallsEscapeTheSlugAndUseTheirVerbs(t *testing.T) {
+	var got []string
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Method+" "+r.URL.EscapedPath())
+		reply(200, `{}`)(w, r)
+	})
+	ctx := context.Background()
+	c.PullProject(ctx, "a/b")
+	c.UpdateProject(ctx, "a/b", []byte(`{}`))
+	c.ArchiveProject(ctx, "a/b")
+	c.UnarchiveProject(ctx, "a/b")
+	want := []string{"GET /api/projects/a%2Fb", "PUT /api/projects/a%2Fb", "POST /api/projects/a%2Fb/archive", "POST /api/projects/a%2Fb/unarchive"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("requests = %q", got)
+	}
+}
