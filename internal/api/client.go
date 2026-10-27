@@ -28,7 +28,19 @@ var (
 	ErrMilestoneNotFound = errors.New("milestone not found")
 	// ErrSpecChanged means a push named a base that is no longer the newest version of the spec.
 	ErrSpecChanged = errors.New("spec changed since the base version")
+	// ErrProjectNotFound means no project has the slug.
+	ErrProjectNotFound = errors.New("project not found")
+	// ErrProjectArchived means an update named a project that is archived.
+	ErrProjectArchived = errors.New("project is archived")
 )
+
+// ProjectChangedError is the server's 409 for an update of a project that changed since it was pulled.
+// Version is the project's current version.
+type ProjectChangedError struct{ Version int }
+
+func (e *ProjectChangedError) Error() string {
+	return fmt.Sprintf("project changed since you pulled it; it is now at version %d", e.Version)
+}
 
 // StatusError is an HTTP status the API contract does not define for the call.
 type StatusError struct{ Status int }
@@ -115,6 +127,49 @@ type Pulled struct {
 	UpdatedBy *string `json:"updated_by"`
 	UpdatedAt *string `json:"updated_at"`
 	Raw       []byte  `json:"-"`
+}
+
+// FileMilestone is a milestone as the project file lists it. Field order is the file's key order.
+type FileMilestone struct {
+	Number    int      `json:"number"`
+	Title     string   `json:"title"`
+	Repos     []string `json:"repos"`
+	DesignURL *string  `json:"design_url"`
+}
+
+// ProjectFile is the file `project pull` writes and `project update` reads. Field order is the file's key order.
+type ProjectFile struct {
+	Slug       string          `json:"slug"`
+	Name       string          `json:"name"`
+	EndGoal    string          `json:"end_goal"`
+	HomeRepo   string          `json:"home_repo"`
+	CanvasURL  *string         `json:"canvas_url"`
+	Version    int             `json:"version"`
+	Milestones []FileMilestone `json:"milestones"`
+}
+
+// PulledProject is a project as the server has it. Raw holds the response body as received.
+type PulledProject struct {
+	File     ProjectFile
+	Archived bool
+	URL      string
+	Raw      []byte
+}
+
+// UpdatedProject is an updated project. Raw holds the response body as received.
+type UpdatedProject struct {
+	Slug    string `json:"slug"`
+	Version int    `json:"version"`
+	URL     string `json:"url"`
+	Raw     []byte `json:"-"`
+}
+
+// ArchivedProject is a project after archive or unarchive. Raw holds the response body as received.
+type ArchivedProject struct {
+	Slug     string `json:"slug"`
+	Archived bool   `json:"archived"`
+	URL      string `json:"url"`
+	Raw      []byte `json:"-"`
 }
 
 const (
@@ -264,6 +319,98 @@ func (c *Client) PullSpec(ctx context.Context, slug string, number int) (Pulled,
 	default:
 		return pulled, &StatusError{Status: status}
 	}
+}
+
+// PullProject returns the project slug as the file `project update` takes.
+// It returns ErrProjectNotFound or ErrUnauthorized when the server refuses it.
+func (c *Client) PullProject(ctx context.Context, slug string) (PulledProject, error) {
+	var pulled PulledProject
+	status, resp, err := c.do(ctx, http.MethodGet, projectPath(slug, ""), nil)
+	if err != nil {
+		return pulled, err
+	}
+	if status != http.StatusOK {
+		return pulled, projectStatusError(status, resp)
+	}
+	var meta struct {
+		Archived bool   `json:"archived"`
+		URL      string `json:"url"`
+	}
+	if err := c.decode(status, resp, &pulled.File); err != nil {
+		return PulledProject{}, err
+	}
+	if err := c.decode(status, resp, &meta); err != nil {
+		return PulledProject{}, err
+	}
+	pulled.Archived, pulled.URL, pulled.Raw = meta.Archived, meta.URL, resp
+	return pulled, nil
+}
+
+// UpdateProject puts body, unchanged, to the project slug. It returns ErrProjectNotFound, ErrUnauthorized,
+// ErrProjectArchived, a *ProjectChangedError or a *ValidationError when the server refuses it.
+func (c *Client) UpdateProject(ctx context.Context, slug string, body []byte) (UpdatedProject, error) {
+	var updated UpdatedProject
+	status, resp, err := c.do(ctx, http.MethodPut, projectPath(slug, ""), body)
+	if err != nil {
+		return updated, err
+	}
+	if status != http.StatusOK {
+		return updated, projectStatusError(status, resp)
+	}
+	updated.Raw = resp
+	return updated, c.decode(status, resp, &updated)
+}
+
+// ArchiveProject archives the project slug.
+func (c *Client) ArchiveProject(ctx context.Context, slug string) (ArchivedProject, error) {
+	return c.setArchived(ctx, slug, "/archive")
+}
+
+// UnarchiveProject brings the project slug back.
+func (c *Client) UnarchiveProject(ctx context.Context, slug string) (ArchivedProject, error) {
+	return c.setArchived(ctx, slug, "/unarchive")
+}
+
+func (c *Client) setArchived(ctx context.Context, slug, action string) (ArchivedProject, error) {
+	var archived ArchivedProject
+	status, resp, err := c.do(ctx, http.MethodPost, projectPath(slug, action), nil)
+	if err != nil {
+		return archived, err
+	}
+	if status != http.StatusOK {
+		return archived, projectStatusError(status, resp)
+	}
+	archived.Raw = resp
+	return archived, c.decode(status, resp, &archived)
+}
+
+// projectStatusError maps a project call's non-200 answer to its error.
+func projectStatusError(status int, body []byte) error {
+	switch status {
+	case http.StatusUnauthorized:
+		return ErrUnauthorized
+	case http.StatusNotFound:
+		return ErrProjectNotFound
+	case http.StatusConflict:
+		var conflict struct {
+			Error   string `json:"error"`
+			Version int    `json:"version"`
+		}
+		_ = json.Unmarshal(body, &conflict)
+		switch conflict.Error {
+		case "project_changed":
+			return &ProjectChangedError{Version: conflict.Version}
+		case "project_archived":
+			return ErrProjectArchived
+		}
+	case http.StatusUnprocessableEntity:
+		return validationError(status, body)
+	}
+	return &StatusError{Status: status}
+}
+
+func projectPath(slug, suffix string) string {
+	return "/api/projects/" + url.PathEscape(slug) + suffix
 }
 
 // pushBody is a push's JSON body: the spec, and the base only when there is one.
