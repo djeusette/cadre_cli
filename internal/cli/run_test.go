@@ -37,3 +37,13 @@ func TestRunUnknownCommand(t *testing.T) {
 		t.Errorf("stderr = %q", errb.String())
 	}
 }
+
+func TestRunUsageNamesPrLink(t *testing.T) {
+	env, _, errb := newEnv()
+	if code := cli.Run(nil, env); code != 2 {
+		t.Errorf("code = %d, want 2", code)
+	}
+	if !strings.Contains(errb.String(), "|pr link <pr-url> (<project>/<n>|--none)|") {
+		t.Errorf("stderr = %q", errb.String())
+	}
+}

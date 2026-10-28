@@ -47,6 +47,10 @@ func TestEveryCallMapsTooManyRequests(t *testing.T) {
 		"create project": func(c *api.Client) error { _, err := c.CreateProject(ctx, []byte(`{}`)); return err },
 		"push spec":      func(c *api.Client) error { _, err := c.PushSpec(ctx, "wish-reminders", 2, "x", ""); return err },
 		"pull spec":      func(c *api.Client) error { _, err := c.PullSpec(ctx, "wish-reminders", 2); return err },
+		"link pull request": func(c *api.Client) error {
+			_, err := c.LinkPullRequest(ctx, "https://github.com/colette-club/colette-api/pull/418", nil)
+			return err
+		},
 	}
 	for name, call := range calls {
 		t.Run(name, func(t *testing.T) {
@@ -418,5 +422,85 @@ func TestProjectCallsEscapeTheSlugAndUseTheirVerbs(t *testing.T) {
 	want := []string{"GET /api/projects/a%2Fb", "PUT /api/projects/a%2Fb", "POST /api/projects/a%2Fb/archive", "POST /api/projects/a%2Fb/unarchive"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("requests = %q", got)
+	}
+}
+
+const linkedJSON = `{"repo":"colette-api","number":418,"url":"https://github.com/colette-club/colette-api/pull/418","milestone":"wish-reminders/2","project_url":"https://cadre.example/projects/wish-reminders"}`
+
+func TestLinkPullRequest(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		if err := json.Unmarshal(b, &body); err != nil || len(body) != 2 ||
+			body["url"] != "https://github.com/colette-club/colette-api/pull/418" || body["milestone"] != "wish-reminders/2" {
+			t.Errorf("body = %s (%v)", b, err)
+		}
+		if r.Method != http.MethodPost || r.URL.EscapedPath() != "/api/pull-requests/link" || r.Header.Get("Authorization") != "Bearer cadre_secret" {
+			t.Errorf("bad request: %s %s %v", r.Method, r.URL.EscapedPath(), r.Header)
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, linkedJSON)
+	})
+	milestone := "wish-reminders/2"
+
+	got, err := c.LinkPullRequest(context.Background(), "https://github.com/colette-club/colette-api/pull/418", &milestone)
+
+	if err != nil || got.Repo != "colette-api" || got.Number != 418 || got.URL != "https://github.com/colette-club/colette-api/pull/418" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if got.Milestone == nil || *got.Milestone != "wish-reminders/2" || got.ProjectURL == nil || *got.ProjectURL != "https://cadre.example/projects/wish-reminders" {
+		t.Errorf("milestone = %v, project_url = %v", got.Milestone, got.ProjectURL)
+	}
+	if string(got.Raw) != linkedJSON {
+		t.Errorf("raw = %s", got.Raw)
+	}
+}
+
+func TestLinkPullRequestSendsNullToUnlink(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		if err := json.Unmarshal(b, &body); err != nil {
+			t.Errorf("body = %s (%v)", b, err)
+		}
+		milestone, sent := body["milestone"]
+		if len(body) != 2 || !sent || milestone != nil {
+			t.Errorf("body = %s", b)
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, `{"repo":"colette-api","number":418,"url":"https://github.com/colette-club/colette-api/pull/418","milestone":null,"project_url":null}`)
+	})
+
+	got, err := c.LinkPullRequest(context.Background(), "https://github.com/colette-club/colette-api/pull/418", nil)
+
+	if err != nil || got.Milestone != nil || got.ProjectURL != nil {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestLinkPullRequestStatuses(t *testing.T) {
+	cases := []struct {
+		status int
+		body   string
+		check  func(error) bool
+	}{
+		{404, `{"error":"milestone_not_found"}`, func(err error) bool { return errors.Is(err, api.ErrMilestoneNotFound) }},
+		{404, `{"error":"pull_request_not_found"}`, func(err error) bool { return errors.Is(err, api.ErrPullRequestNotFound) }},
+		{404, `{"error":"not_found"}`, func(err error) bool { var serr *api.StatusError; return errors.As(err, &serr) && serr.Status == 404 }},
+		{503, `{"error":"github_not_connected"}`, func(err error) bool { return errors.Is(err, api.ErrGitHubNotConnected) }},
+		{502, `{"error":"github_unreachable"}`, func(err error) bool { return errors.Is(err, api.ErrGitHubUnreachable) }},
+		{401, `{"error":"unauthorized"}`, func(err error) bool { return errors.Is(err, api.ErrUnauthorized) }},
+		{422, `{"errors":[{"path":"url","message":"is in a repo no project names"}]}`, func(err error) bool {
+			var verr *api.ValidationError
+			return errors.As(err, &verr) && len(verr.Errors) == 1 && verr.Errors[0] == (api.FieldError{Path: "url", Message: "is in a repo no project names"})
+		}},
+		{500, `oops`, func(err error) bool { var serr *api.StatusError; return errors.As(err, &serr) && serr.Status == 500 }},
+		{200, `oops`, func(err error) bool { return err != nil && strings.Contains(err.Error(), "status 200") }},
+	}
+	for _, tc := range cases {
+		c := newClient(t, reply(tc.status, tc.body))
+		if _, err := c.LinkPullRequest(context.Background(), "https://github.com/colette-club/colette-api/pull/418", nil); !tc.check(err) {
+			t.Errorf("%d %s: err = %v", tc.status, tc.body, err)
+		}
 	}
 }

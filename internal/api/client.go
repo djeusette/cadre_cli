@@ -32,6 +32,12 @@ var (
 	ErrProjectNotFound = errors.New("project not found")
 	// ErrProjectArchived means an update named a project that is archived.
 	ErrProjectArchived = errors.New("project is archived")
+	// ErrPullRequestNotFound means GitHub has no pull request at the URL a link named.
+	ErrPullRequestNotFound = errors.New("pull request not found")
+	// ErrGitHubNotConnected means the server has no GitHub App set up yet.
+	ErrGitHubNotConnected = errors.New("github is not connected")
+	// ErrGitHubUnreachable means the server could not reach GitHub.
+	ErrGitHubUnreachable = errors.New("github is unreachable")
 )
 
 // ProjectChangedError is the server's 409 for an update of a project that changed since it was pulled.
@@ -170,6 +176,17 @@ type ArchivedProject struct {
 	Archived bool   `json:"archived"`
 	URL      string `json:"url"`
 	Raw      []byte `json:"-"`
+}
+
+// Linked is a pull request after a link or an unlink. Milestone and ProjectURL are nil once it is unlinked.
+// Raw holds the response body as received.
+type Linked struct {
+	Repo       string  `json:"repo"`
+	Number     int     `json:"number"`
+	URL        string  `json:"url"`
+	Milestone  *string `json:"milestone"`
+	ProjectURL *string `json:"project_url"`
+	Raw        []byte  `json:"-"`
 }
 
 const (
@@ -382,6 +399,60 @@ func (c *Client) setArchived(ctx context.Context, slug, action string) (Archived
 	}
 	archived.Raw = resp
 	return archived, c.decode(status, resp, &archived)
+}
+
+// LinkPullRequest links the pull request at prURL to milestone, written <project>/<n>, or unlinks it when milestone
+// is nil. The server reads the pull request from GitHub first. It returns ErrMilestoneNotFound,
+// ErrPullRequestNotFound, ErrGitHubNotConnected, ErrGitHubUnreachable, ErrUnauthorized or a *ValidationError when the
+// server refuses it.
+func (c *Client) LinkPullRequest(ctx context.Context, prURL string, milestone *string) (Linked, error) {
+	var linked Linked
+	payload, err := json.Marshal(linkBody{URL: prURL, Milestone: milestone})
+	if err != nil {
+		return linked, err
+	}
+	status, resp, err := c.do(ctx, http.MethodPost, "/api/pull-requests/link", payload)
+	if err != nil {
+		return linked, err
+	}
+	switch status {
+	case http.StatusOK:
+		linked.Raw = resp
+		return linked, c.decode(status, resp, &linked)
+	case http.StatusUnauthorized:
+		return linked, ErrUnauthorized
+	case http.StatusNotFound:
+		return linked, linkNotFound(status, resp)
+	case http.StatusServiceUnavailable:
+		return linked, ErrGitHubNotConnected
+	case http.StatusBadGateway:
+		return linked, ErrGitHubUnreachable
+	case http.StatusUnprocessableEntity:
+		return linked, validationError(status, resp)
+	default:
+		return linked, &StatusError{Status: status}
+	}
+}
+
+// linkBody is a link call's JSON body. A nil Milestone is sent as null, which unlinks.
+type linkBody struct {
+	URL       string  `json:"url"`
+	Milestone *string `json:"milestone"`
+}
+
+// linkNotFound tells a missing milestone from a pull request GitHub does not have.
+func linkNotFound(status int, body []byte) error {
+	var answer struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(body, &answer)
+	switch answer.Error {
+	case "milestone_not_found":
+		return ErrMilestoneNotFound
+	case "pull_request_not_found":
+		return ErrPullRequestNotFound
+	}
+	return &StatusError{Status: status}
 }
 
 // projectStatusError maps a project call's non-200 answer to its error.
