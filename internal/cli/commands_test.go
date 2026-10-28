@@ -18,6 +18,9 @@ import (
 	"github.com/djeusette/cadre_cli/internal/config"
 )
 
+// usageLine is what every usage error prints on stderr.
+const usageLine = "Usage: cadre <login --url <url>|whoami|project create <file>|project pull <slug> [-o <file>]|project update <file>|project archive <slug>|project unarchive <slug>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|pr link <pr-url> (<project>/<n>|--none)|upgrade|version> [--json]\n"
+
 type harness struct {
 	deps    cli.Env
 	out     *strings.Builder
@@ -587,7 +590,7 @@ func TestLoginRequiresAnHTTPURL(t *testing.T) {
 		writeJSON(w, 500, `{}`)
 	}))
 	t.Cleanup(srv.Close)
-	usage := "Usage: cadre <login --url <url>|whoami|project create <file>|project pull <slug> [-o <file>]|project update <file>|project archive <slug>|project unarchive <slug>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|upgrade|version> [--json]\n"
+	usage := usageLine
 
 	for _, args := range [][]string{{"login"}, {"login", "--url"}, {"login", srv.URL}, {"login", "--url", srv.URL, "extra"}} {
 		h := newHarness(t, srv, nil)
@@ -766,7 +769,7 @@ func TestSpecPushUsage(t *testing.T) {
 	}
 	for _, args := range cases {
 		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
-		want := "Usage: cadre <login --url <url>|whoami|project create <file>|project pull <slug> [-o <file>]|project update <file>|project archive <slug>|project unarchive <slug>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|upgrade|version> [--json]\n"
+		want := usageLine
 		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != want {
 			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
 		}
@@ -962,7 +965,7 @@ func TestSpecPullUsage(t *testing.T) {
 	}
 	for _, args := range cases {
 		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
-		want := "Usage: cadre <login --url <url>|whoami|project create <file>|project pull <slug> [-o <file>]|project update <file>|project archive <slug>|project unarchive <slug>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|upgrade|version> [--json]\n"
+		want := usageLine
 		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != want {
 			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
 		}
@@ -1325,12 +1328,162 @@ func TestProjectUsage(t *testing.T) {
 		{"project"},
 		{"project", "destroy", "a"},
 	}
-	want := "Usage: cadre <login --url <url>|whoami|project create <file>|project pull <slug> [-o <file>]|project update <file>|project archive <slug>|project unarchive <slug>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|upgrade|version> [--json]\n"
+	want := usageLine
 	for _, args := range cases {
 		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
 		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != want {
 			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
 		}
+	}
+	if got.calls != 0 {
+		t.Errorf("the server was called: %+v", got)
+	}
+}
+
+type linkRequest struct {
+	calls              int
+	method, path, auth string
+	body               map[string]any
+}
+
+func linkServer(t *testing.T, status int, body string, got *linkRequest) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got.calls++
+		got.method, got.path, got.auth = r.Method, r.URL.EscapedPath(), r.Header.Get("Authorization")
+		if err := json.Unmarshal(b, &got.body); err != nil {
+			t.Errorf("body %q: %v", b, err)
+		}
+		writeJSON(w, status, body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+const prURL = "https://github.com/colette-club/colette-api/pull/418"
+
+const linkedBody = `{"repo":"colette-api","number":418,"url":"https://github.com/colette-club/colette-api/pull/418","milestone":"wish-reminders/2","project_url":"https://cadre.example/projects/wish-reminders"}`
+
+const unlinkedBody = `{"repo":"colette-api","number":418,"url":"https://github.com/colette-club/colette-api/pull/418","milestone":null,"project_url":null}`
+
+func TestPrLink(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, linkedBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"pr", "link", prURL, "wish-reminders/2"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Linked colette-api #418 to wish-reminders/2: https://cadre.example/projects/wish-reminders\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+	if got.method != "POST" || got.path != "/api/pull-requests/link" || got.auth != "Bearer cadre_abc" {
+		t.Errorf("request = %+v", got)
+	}
+	if len(got.body) != 2 || got.body["url"] != prURL || got.body["milestone"] != "wish-reminders/2" {
+		t.Errorf("body = %v", got.body)
+	}
+}
+
+func TestPrLinkNone(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, unlinkedBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"pr", "link", "--none", prURL}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Unlinked colette-api #418.\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+	milestone, sent := got.body["milestone"]
+	if len(got.body) != 2 || got.body["url"] != prURL || !sent || milestone != nil {
+		t.Errorf("body = %v", got.body)
+	}
+}
+
+func TestPrLinkJSON(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		body string
+	}{
+		{[]string{"pr", "link", prURL, "wish-reminders/2", "--json"}, linkedBody},
+		{[]string{"pr", "link", prURL, "--none", "--json"}, unlinkedBody},
+	} {
+		var got linkRequest
+		srv := linkServer(t, 200, tc.body, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+		if code := cli.Run(tc.args, h.deps); code != 0 || h.out.String() != tc.body {
+			t.Errorf("%q: code = %d, stdout = %q, stderr %q", tc.args, code, h.out, h.errb)
+		}
+	}
+}
+
+func TestPrLinkErrors(t *testing.T) {
+	cases := []struct {
+		status int
+		body   string
+		want   func(server string) string
+	}{
+		{404, `{"error":"milestone_not_found"}`, func(server string) string { return "No milestone wish-reminders/9 on " + server + ".\n" }},
+		{404, `{"error":"pull_request_not_found"}`, func(string) string { return "GitHub has no pull request at " + prURL + ".\n" }},
+		{503, `{"error":"github_not_connected"}`, func(server string) string {
+			return "GitHub isn't connected on " + server + " yet. An org owner sets it up on its Setup page.\n"
+		}},
+		{502, `{"error":"github_unreachable"}`, func(string) string { return "Cadre couldn't reach GitHub. Try again in a minute.\n" }},
+		{422, `{"errors":[{"path":"url","message":"is in a repo no project names"}]}`, func(string) string { return "url: is in a repo no project names\n" }},
+		{401, `{"error":"unauthorized"}`, func(server string) string {
+			return "Your key for " + server + " is no longer valid. Run cadre login --url " + server + ".\n"
+		}},
+	}
+	for _, tc := range cases {
+		var got linkRequest
+		srv := linkServer(t, tc.status, tc.body, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+		if code := cli.Run([]string{"pr", "link", prURL, "wish-reminders/9"}, h.deps); code != 1 {
+			t.Errorf("%d %s: code = %d", tc.status, tc.body, code)
+		}
+		if want := tc.want(srv.URL); h.errb.String() != want {
+			t.Errorf("%d %s: stderr = %q, want %q", tc.status, tc.body, h.errb, want)
+		}
+	}
+}
+
+func TestPrLinkUsage(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, linkedBody, &got)
+	cases := [][]string{
+		{"pr"},
+		{"pr", "link"},
+		{"pr", "link", prURL},
+		{"pr", "link", "--none"},
+		{"pr", "link", prURL, "wish-reminders/2", "--none"},
+		{"pr", "link", prURL, "nope"},
+		{"pr", "link", prURL, "wish-reminders/0"},
+		{"pr", "link", prURL, "wish-reminders/2", "extra"},
+		{"pr", "unlink", prURL},
+	}
+	for _, args := range cases {
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != usageLine {
+			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
+		}
+	}
+	if got.calls != 0 {
+		t.Errorf("the server was called: %+v", got)
+	}
+}
+
+func TestPrLinkNotSignedIn(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, linkedBody, &got)
+	h := newHarness(t, srv, nil)
+
+	if code := cli.Run([]string{"pr", "link", prURL, "wish-reminders/2"}, h.deps); code != 1 || h.errb.String() != "Not signed in. Run cadre login --url <url>.\n" {
+		t.Errorf("code = %d, stderr %q", code, h.errb)
 	}
 	if got.calls != 0 {
 		t.Errorf("the server was called: %+v", got)

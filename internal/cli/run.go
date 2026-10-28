@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const usage = "Usage: cadre <login --url <url>|whoami|project create <file>|project pull <slug> [-o <file>]|project update <file>|project archive <slug>|project unarchive <slug>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|upgrade|version> [--json]"
+const usage = "Usage: cadre <login --url <url>|whoami|project create <file>|project pull <slug> [-o <file>]|project update <file>|project archive <slug>|project unarchive <slug>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|pr link <pr-url> (<project>/<n>|--none)|upgrade|version> [--json]"
 
 // Env carries everything a command touches outside its arguments, so tests can fake it.
 type Env struct {
@@ -24,7 +24,7 @@ type Env struct {
 
 // Run executes the command in args and returns the exit code: 0 ok, 1 failure, 2 usage error.
 func Run(args []string, env Env) int {
-	args, asJSON := splitJSONFlag(args)
+	args, asJSON := splitBoolFlag(args, "--json")
 	if len(args) == 0 {
 		return usageError(env)
 	}
@@ -41,6 +41,8 @@ func Run(args []string, env Env) int {
 		return runProject(env, asJSON, args[1:])
 	case "spec":
 		return runSpec(env, asJSON, args[1:])
+	case "pr":
+		return runPr(env, asJSON, args[1:])
 	case "upgrade":
 		return runUpgrade(env, asJSON, args[1:])
 	default:
@@ -48,18 +50,19 @@ func Run(args []string, env Env) int {
 	}
 }
 
-// splitJSONFlag removes the global --json flag from args wherever it appears.
-func splitJSONFlag(args []string) ([]string, bool) {
+// splitBoolFlag removes the boolean flag name, such as the global --json, from args wherever it appears,
+// and reports whether it was there.
+func splitBoolFlag(args []string, name string) ([]string, bool) {
 	rest := make([]string, 0, len(args))
-	asJSON := false
+	found := false
 	for _, a := range args {
-		if a == "--json" {
-			asJSON = true
+		if a == name {
+			found = true
 			continue
 		}
 		rest = append(rest, a)
 	}
-	return rest, asJSON
+	return rest, found
 }
 
 func usageError(env Env) int {

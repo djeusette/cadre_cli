@@ -36,6 +36,7 @@ cadre spec push wish-reminders/2 spec.md --base <version>
 | `cadre project unarchive <slug>` | Brings an archived project back and prints its page |
 | `cadre spec pull <project>/<n> [-o <file>]` | Prints the newest version of milestone `<n>`'s spec exactly as stored, or writes it to `<file>`. With `--json`, prints the answer, whose `version` names that version |
 | `cadre spec push <project>/<n> <file> [--base <version>]` | Uploads a markdown file, unchanged, as the newest version of milestone `<n>`'s spec, and prints the project's page. With `--base`, the push is refused when someone pushed a newer version since that one: pull again |
+| `cadre pr link <pr-url> <project>/<n>` | Links a pull request to a milestone; `--none` unlinks it |
 | `cadre upgrade` | Replaces this `cadre` with the latest release on GitHub once the download matches the release's checksums, and prints both versions. It changes nothing when this is already the latest, and refuses a development build. Needs no sign-in |
 | `cadre version` | Prints the version |
 
