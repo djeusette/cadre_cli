@@ -474,11 +474,11 @@ type Repository struct {
 // Target is a repo's deploy target on one platform. Repo is empty in a Repository's targets.
 // Tracked is whether cadre can read that platform's deploys. Raw holds the response body as received.
 type Target struct {
-	Repo     string            `json:"repo"`
-	Platform string            `json:"platform"`
-	Settings map[string]string `json:"settings"`
-	Tracked  bool              `json:"tracked"`
-	Raw      []byte            `json:"-"`
+	Repo     string         `json:"repo"`
+	Platform string         `json:"platform"`
+	Settings map[string]any `json:"settings"`
+	Tracked  bool           `json:"tracked"`
+	Raw      []byte         `json:"-"`
 }
 
 // Unset is a removed deploy target. Raw holds the response body as received.

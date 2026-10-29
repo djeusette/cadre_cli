@@ -33,6 +33,10 @@ func runRepo(env Env, asJSON bool, args []string) int {
 			platform, settings["app"] = "fly", flyApp
 		}
 		return runCommand(env, asJSON, rest, 1, func(ctx context.Context, s *session, a []string) int {
+			if flyApp == "" && strings.EqualFold(platform, "fly") {
+				fmt.Fprintf(s.env.Stderr, "Fly has its own flag: cadre repo set %s --fly-app <app>.\n", a[0])
+				return 1
+			}
 			return setTarget(ctx, s, a[0], platform, settings)
 		})
 	case "unset":
@@ -66,7 +70,7 @@ func setTarget(ctx context.Context, s *session, repo, platform string, settings 
 	case s.asJSON:
 		fmt.Fprint(s.env.Stdout, string(target.Raw))
 	case target.Tracked:
-		fmt.Fprintf(s.env.Stdout, "Connected %s to the %s app %s.\n", target.Repo, displayName(target.Platform), target.Settings["app"])
+		fmt.Fprintf(s.env.Stdout, "Connected %s to the %s app %s.\n", target.Repo, displayName(target.Platform), fmt.Sprint(target.Settings["app"]))
 	default:
 		fmt.Fprintf(s.env.Stdout, "cadre can't read %s deploys yet, so %s shows as not tracked.\n", displayName(target.Platform), target.Repo)
 	}
@@ -135,7 +139,7 @@ func targetState(t api.Target) string {
 	}
 	pairs := make([]string, 0, len(t.Settings))
 	for _, key := range slices.Sorted(maps.Keys(t.Settings)) {
-		pairs = append(pairs, key+" "+t.Settings[key])
+		pairs = append(pairs, key+" "+fmt.Sprint(t.Settings[key]))
 	}
 	if len(pairs) == 0 {
 		return "tracked"
@@ -146,7 +150,7 @@ func targetState(t api.Target) string {
 // repoFailure prints a failed repo call to stderr and returns exit code 1. platform is the one the person typed,
 // or empty when the call names none.
 func (s *session) repoFailure(err error, repo, platform string) int {
-	name := displayName(platform)
+	name := displayName(strings.ToLower(platform))
 	switch {
 	case errors.Is(err, api.ErrRepositoryNotFound):
 		fmt.Fprintf(s.env.Stderr, "No repo %s on %s.\n", repo, s.baseURL)

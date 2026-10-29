@@ -601,9 +601,9 @@ func TestSetTargetStatuses(t *testing.T) {
 		{503, `{"error":"platform_not_connected","platform":"fly"}`, func(err error) bool { return errors.Is(err, api.ErrPlatformNotConnected) }},
 		{502, `{"error":"platform_unreachable","platform":"fly"}`, func(err error) bool { return errors.Is(err, api.ErrPlatformUnreachable) }},
 		{401, `{"error":"unauthorized"}`, func(err error) bool { return errors.Is(err, api.ErrUnauthorized) }},
-		{422, `{"errors":[{"path":"app","message":"is not an app in the org"}]}`, func(err error) bool {
+		{422, `{"errors":[{"path":"settings.app","message":"is not an app in the org"}]}`, func(err error) bool {
 			var verr *api.ValidationError
-			return errors.As(err, &verr) && len(verr.Errors) == 1 && verr.Errors[0] == (api.FieldError{Path: "app", Message: "is not an app in the org"})
+			return errors.As(err, &verr) && len(verr.Errors) == 1 && verr.Errors[0] == (api.FieldError{Path: "settings.app", Message: "is not an app in the org"})
 		}},
 		{500, `oops`, func(err error) bool { var serr *api.StatusError; return errors.As(err, &serr) && serr.Status == 500 }},
 		{200, `oops`, func(err error) bool { return err != nil && strings.Contains(err.Error(), "status 200") }},

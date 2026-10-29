@@ -671,7 +671,7 @@ func specServer(t *testing.T, status int, body string, got *specRequest) *httpte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		*got = specRequest{method: r.Method, path: r.URL.EscapedPath(), auth: r.Header.Get("Authorization")}
-		if err := json.Unmarshal(b, &got.body); len(b) > 0 && err != nil {
+		if err := json.Unmarshal(b, &got.body); err != nil {
 			t.Errorf("body %q: %v", b, err)
 		}
 		writeJSON(w, status, body)
@@ -1543,6 +1543,51 @@ func TestRepoUnset(t *testing.T) {
 	}
 }
 
+func TestRepoUnsetDisplaysPlatformLowerCased(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 404, `{"error":"target_not_found"}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "unset", "colette-site", "--platform", "RENDER"}, h.deps); code != 1 {
+		t.Fatalf("code = %d", code)
+	}
+	if want := "colette-site has no Render target.\n"; h.errb.String() != want {
+		t.Errorf("stderr = %q, want %q", h.errb, want)
+	}
+}
+
+func TestRepoSetPlatformFlyPointsToItsFlag(t *testing.T) {
+	for _, platform := range []string{"fly", "FLY", "Fly"} {
+		var got linkRequest
+		srv := linkServer(t, 200, repoShowBody, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+		if code := cli.Run([]string{"repo", "set", "colette-api", "--platform", platform}, h.deps); code != 1 {
+			t.Errorf("%s: code = %d", platform, code)
+		}
+		if want := "Fly has its own flag: cadre repo set colette-api --fly-app <app>.\n"; h.errb.String() != want {
+			t.Errorf("%s: stderr = %q, want %q", platform, h.errb, want)
+		}
+		if got.calls != 0 {
+			t.Errorf("%s: the server was called: %+v", platform, got)
+		}
+	}
+}
+
+func TestRepoShowPrintsAnySettingValue(t *testing.T) {
+	var got linkRequest
+	body := `{"name":"colette-api","github_full_name":"colette-club/colette-api","targets":[{"platform":"fly","settings":{"app":"colette-api-prod","port":8080},"tracked":true}]}`
+	srv := linkServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "show", "colette-api"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "colette-api (colette-club/colette-api)\n  Fly  app colette-api-prod, port 8080\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+}
+
 func TestRepoShow(t *testing.T) {
 	var got linkRequest
 	srv := linkServer(t, 200, repoShowBody, &got)
@@ -1624,7 +1669,7 @@ func TestRepoErrors(t *testing.T) {
 			return "Fly isn't connected on " + server + " yet. Set it up on its Setup page.\n"
 		}},
 		{set, 502, `{"error":"platform_unreachable","platform":"fly"}`, func(string) string { return "Cadre couldn't reach Fly. Try again in a minute.\n" }},
-		{set, 422, `{"errors":[{"path":"app","message":"is not an app in the org"}]}`, func(string) string { return "app: is not an app in the org\n" }},
+		{set, 422, `{"errors":[{"path":"settings.app","message":"is not an app in the org"}]}`, func(string) string { return "settings.app: is not an app in the org\n" }},
 		{show, 401, `{"error":"unauthorized"}`, func(server string) string {
 			return "Your key for " + server + " is no longer valid. Run cadre login --url " + server + ".\n"
 		}},
