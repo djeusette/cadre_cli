@@ -38,6 +38,14 @@ var (
 	ErrGitHubNotConnected = errors.New("github is not connected")
 	// ErrGitHubUnreachable means the server could not reach GitHub.
 	ErrGitHubUnreachable = errors.New("github is unreachable")
+	// ErrRepositoryNotFound means the server has no such repo.
+	ErrRepositoryNotFound = errors.New("repository not found")
+	// ErrTargetNotFound means the repo has no target on that platform.
+	ErrTargetNotFound = errors.New("target not found")
+	// ErrPlatformNotConnected means the server has no access to the platform yet.
+	ErrPlatformNotConnected = errors.New("platform is not connected")
+	// ErrPlatformUnreachable means the server could not reach the platform.
+	ErrPlatformUnreachable = errors.New("platform is unreachable")
 )
 
 // ProjectChangedError is the server's 409 for an update of a project that changed since it was pulled.
@@ -453,6 +461,120 @@ func linkNotFound(status int, body []byte) error {
 		return ErrPullRequestNotFound
 	}
 	return &StatusError{Status: status}
+}
+
+// Repository is a repo with its deploy targets. Raw holds the response body as received.
+type Repository struct {
+	Name           string   `json:"name"`
+	GitHubFullName string   `json:"github_full_name"`
+	Targets        []Target `json:"targets"`
+	Raw            []byte   `json:"-"`
+}
+
+// Target is a repo's deploy target on one platform. Repo is empty in a Repository's targets.
+// Tracked is whether cadre can read that platform's deploys. Raw holds the response body as received.
+type Target struct {
+	Repo     string            `json:"repo"`
+	Platform string            `json:"platform"`
+	Settings map[string]string `json:"settings"`
+	Tracked  bool              `json:"tracked"`
+	Raw      []byte            `json:"-"`
+}
+
+// Unset is a removed deploy target. Raw holds the response body as received.
+type Unset struct {
+	Repo     string `json:"repo"`
+	Platform string `json:"platform"`
+	Raw      []byte `json:"-"`
+}
+
+// ShowRepository returns the repo and its deploy targets. It returns ErrRepositoryNotFound or ErrUnauthorized
+// when the server refuses it.
+func (c *Client) ShowRepository(ctx context.Context, repo string) (Repository, error) {
+	var shown Repository
+	status, resp, err := c.do(ctx, http.MethodGet, repositoryPath(repo, ""), nil)
+	if err != nil {
+		return shown, err
+	}
+	if status != http.StatusOK {
+		return shown, repositoryStatusError(status, resp)
+	}
+	shown.Raw = resp
+	return shown, c.decode(status, resp, &shown)
+}
+
+// SetTarget sets the repo's target on platform, replacing its settings. The server reads the platform first. It
+// returns ErrRepositoryNotFound, ErrPlatformNotConnected, ErrPlatformUnreachable, ErrUnauthorized or a
+// *ValidationError when the server refuses it.
+func (c *Client) SetTarget(ctx context.Context, repo, platform string, settings map[string]string) (Target, error) {
+	var target Target
+	if settings == nil {
+		settings = map[string]string{}
+	}
+	payload, err := json.Marshal(map[string]map[string]string{"settings": settings})
+	if err != nil {
+		return target, err
+	}
+	status, resp, err := c.do(ctx, http.MethodPut, targetPath(repo, platform), payload)
+	if err != nil {
+		return target, err
+	}
+	switch status {
+	case http.StatusOK:
+		target.Raw = resp
+		return target, c.decode(status, resp, &target)
+	case http.StatusServiceUnavailable:
+		return target, ErrPlatformNotConnected
+	case http.StatusBadGateway:
+		return target, ErrPlatformUnreachable
+	default:
+		return target, repositoryStatusError(status, resp)
+	}
+}
+
+// UnsetTarget removes the repo's target on platform. It returns ErrRepositoryNotFound, ErrTargetNotFound or
+// ErrUnauthorized when the server refuses it.
+func (c *Client) UnsetTarget(ctx context.Context, repo, platform string) (Unset, error) {
+	var removed Unset
+	status, resp, err := c.do(ctx, http.MethodDelete, targetPath(repo, platform), nil)
+	if err != nil {
+		return removed, err
+	}
+	if status != http.StatusOK {
+		return removed, repositoryStatusError(status, resp)
+	}
+	removed.Raw = resp
+	return removed, c.decode(status, resp, &removed)
+}
+
+// repositoryStatusError maps a repository call's non-200 answer to its error, telling the 404s apart by code.
+func repositoryStatusError(status int, body []byte) error {
+	switch status {
+	case http.StatusUnauthorized:
+		return ErrUnauthorized
+	case http.StatusNotFound:
+		var answer struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(body, &answer)
+		switch answer.Error {
+		case "repository_not_found":
+			return ErrRepositoryNotFound
+		case "target_not_found":
+			return ErrTargetNotFound
+		}
+	case http.StatusUnprocessableEntity:
+		return validationError(status, body)
+	}
+	return &StatusError{Status: status}
+}
+
+func repositoryPath(repo, suffix string) string {
+	return "/api/repositories/" + url.PathEscape(repo) + suffix
+}
+
+func targetPath(repo, platform string) string {
+	return repositoryPath(repo, "/targets/"+url.PathEscape(platform))
 }
 
 // projectStatusError maps a project call's non-200 answer to its error.

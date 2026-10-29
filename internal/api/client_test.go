@@ -51,6 +51,12 @@ func TestEveryCallMapsTooManyRequests(t *testing.T) {
 			_, err := c.LinkPullRequest(ctx, "https://github.com/colette-club/colette-api/pull/418", nil)
 			return err
 		},
+		"show repository": func(c *api.Client) error { _, err := c.ShowRepository(ctx, "colette-api"); return err },
+		"set target": func(c *api.Client) error {
+			_, err := c.SetTarget(ctx, "colette-api", "fly", map[string]string{"app": "colette-api-prod"})
+			return err
+		},
+		"unset target": func(c *api.Client) error { _, err := c.UnsetTarget(ctx, "colette-site", "render"); return err },
 	}
 	for name, call := range calls {
 		t.Run(name, func(t *testing.T) {
@@ -500,6 +506,166 @@ func TestLinkPullRequestStatuses(t *testing.T) {
 	for _, tc := range cases {
 		c := newClient(t, reply(tc.status, tc.body))
 		if _, err := c.LinkPullRequest(context.Background(), "https://github.com/colette-club/colette-api/pull/418", nil); !tc.check(err) {
+			t.Errorf("%d %s: err = %v", tc.status, tc.body, err)
+		}
+	}
+}
+
+const repositoryJSON = `{"name":"colette-api","github_full_name":"colette-club/colette-api","targets":[{"platform":"fly","settings":{"app":"colette-api-prod"},"tracked":true},{"platform":"render","settings":{},"tracked":false}]}`
+
+func TestShowRepository(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.EscapedPath() != "/api/repositories/colette-api" || r.Header.Get("Authorization") != "Bearer cadre_secret" {
+			t.Errorf("bad request: %s %s %v", r.Method, r.URL.EscapedPath(), r.Header)
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, repositoryJSON)
+	})
+
+	got, err := c.ShowRepository(context.Background(), "colette-api")
+
+	if err != nil || got.Name != "colette-api" || got.GitHubFullName != "colette-club/colette-api" || len(got.Targets) != 2 {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if fly := got.Targets[0]; fly.Platform != "fly" || fly.Settings["app"] != "colette-api-prod" || !fly.Tracked {
+		t.Errorf("fly = %+v", fly)
+	}
+	if render := got.Targets[1]; render.Platform != "render" || len(render.Settings) != 0 || render.Tracked {
+		t.Errorf("render = %+v", render)
+	}
+	if string(got.Raw) != repositoryJSON {
+		t.Errorf("raw = %s", got.Raw)
+	}
+}
+
+func TestShowRepositoryEscapesTheName(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() != "/api/repositories/a%2Fb" {
+			t.Errorf("path = %s", r.URL.EscapedPath())
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, repositoryJSON)
+	})
+	if _, err := c.ShowRepository(context.Background(), "a/b"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const targetJSON = `{"repo":"colette-api","platform":"fly","settings":{"app":"colette-api-prod"},"tracked":true}`
+
+func TestSetTarget(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		if string(b) != `{"settings":{"app":"colette-api-prod"}}` {
+			t.Errorf("body = %s", b)
+		}
+		if r.Method != http.MethodPut || r.URL.EscapedPath() != "/api/repositories/colette-api/targets/fly" || r.Header.Get("Authorization") != "Bearer cadre_secret" {
+			t.Errorf("bad request: %s %s %v", r.Method, r.URL.EscapedPath(), r.Header)
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, targetJSON)
+	})
+
+	got, err := c.SetTarget(context.Background(), "colette-api", "fly", map[string]string{"app": "colette-api-prod"})
+
+	if err != nil || got.Repo != "colette-api" || got.Platform != "fly" || got.Settings["app"] != "colette-api-prod" || !got.Tracked {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if string(got.Raw) != targetJSON {
+		t.Errorf("raw = %s", got.Raw)
+	}
+}
+
+func TestSetTargetSendsEmptySettingsAsAnObject(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		if string(b) != `{"settings":{}}` {
+			t.Errorf("body = %s", b)
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, `{"repo":"colette-site","platform":"render","settings":{},"tracked":false}`)
+	})
+	if _, err := c.SetTarget(context.Background(), "colette-site", "render", nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSetTargetStatuses(t *testing.T) {
+	cases := []struct {
+		status int
+		body   string
+		check  func(error) bool
+	}{
+		{404, `{"error":"repository_not_found"}`, func(err error) bool { return errors.Is(err, api.ErrRepositoryNotFound) }},
+		{404, `{"error":"other"}`, func(err error) bool { var serr *api.StatusError; return errors.As(err, &serr) && serr.Status == 404 }},
+		{503, `{"error":"platform_not_connected","platform":"fly"}`, func(err error) bool { return errors.Is(err, api.ErrPlatformNotConnected) }},
+		{502, `{"error":"platform_unreachable","platform":"fly"}`, func(err error) bool { return errors.Is(err, api.ErrPlatformUnreachable) }},
+		{401, `{"error":"unauthorized"}`, func(err error) bool { return errors.Is(err, api.ErrUnauthorized) }},
+		{422, `{"errors":[{"path":"app","message":"is not an app in the org"}]}`, func(err error) bool {
+			var verr *api.ValidationError
+			return errors.As(err, &verr) && len(verr.Errors) == 1 && verr.Errors[0] == (api.FieldError{Path: "app", Message: "is not an app in the org"})
+		}},
+		{500, `oops`, func(err error) bool { var serr *api.StatusError; return errors.As(err, &serr) && serr.Status == 500 }},
+		{200, `oops`, func(err error) bool { return err != nil && strings.Contains(err.Error(), "status 200") }},
+	}
+	for _, tc := range cases {
+		c := newClient(t, reply(tc.status, tc.body))
+		if _, err := c.SetTarget(context.Background(), "colette-api", "fly", nil); !tc.check(err) {
+			t.Errorf("%d %s: err = %v", tc.status, tc.body, err)
+		}
+	}
+}
+
+func TestUnsetTarget(t *testing.T) {
+	const body = `{"repo":"colette-site","platform":"render"}`
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.EscapedPath() != "/api/repositories/colette-site/targets/render" || r.Header.Get("Authorization") != "Bearer cadre_secret" {
+			t.Errorf("bad request: %s %s %v", r.Method, r.URL.EscapedPath(), r.Header)
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, body)
+	})
+
+	got, err := c.UnsetTarget(context.Background(), "colette-site", "render")
+
+	if err != nil || got.Repo != "colette-site" || got.Platform != "render" || string(got.Raw) != body {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestUnsetTargetStatuses(t *testing.T) {
+	cases := []struct {
+		status int
+		body   string
+		check  func(error) bool
+	}{
+		{404, `{"error":"repository_not_found"}`, func(err error) bool { return errors.Is(err, api.ErrRepositoryNotFound) }},
+		{404, `{"error":"target_not_found"}`, func(err error) bool { return errors.Is(err, api.ErrTargetNotFound) }},
+		{404, `{"error":"other"}`, func(err error) bool { var serr *api.StatusError; return errors.As(err, &serr) && serr.Status == 404 }},
+		{401, `{"error":"unauthorized"}`, func(err error) bool { return errors.Is(err, api.ErrUnauthorized) }},
+		{500, `oops`, func(err error) bool { var serr *api.StatusError; return errors.As(err, &serr) && serr.Status == 500 }},
+	}
+	for _, tc := range cases {
+		c := newClient(t, reply(tc.status, tc.body))
+		if _, err := c.UnsetTarget(context.Background(), "colette-site", "render"); !tc.check(err) {
+			t.Errorf("%d %s: err = %v", tc.status, tc.body, err)
+		}
+	}
+}
+
+func TestShowRepositoryStatuses(t *testing.T) {
+	cases := []struct {
+		status int
+		body   string
+		check  func(error) bool
+	}{
+		{404, `{"error":"repository_not_found"}`, func(err error) bool { return errors.Is(err, api.ErrRepositoryNotFound) }},
+		{401, `{"error":"unauthorized"}`, func(err error) bool { return errors.Is(err, api.ErrUnauthorized) }},
+		{500, `oops`, func(err error) bool { var serr *api.StatusError; return errors.As(err, &serr) && serr.Status == 500 }},
+	}
+	for _, tc := range cases {
+		c := newClient(t, reply(tc.status, tc.body))
+		if _, err := c.ShowRepository(context.Background(), "colette-api"); !tc.check(err) {
 			t.Errorf("%d %s: err = %v", tc.status, tc.body, err)
 		}
 	}

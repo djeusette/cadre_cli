@@ -19,7 +19,7 @@ import (
 )
 
 // usageLine is what every usage error prints on stderr.
-const usageLine = "Usage: cadre <login --url <url>|whoami|project create <file>|project pull <slug> [-o <file>]|project update <file>|project archive <slug>|project unarchive <slug>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|pr link <pr-url> (<project>/<n>|--none)|upgrade|version> [--json]\n"
+const usageLine = "Usage: cadre <login --url <url>|whoami|project create <file>|project pull <slug> [-o <file>]|project update <file>|project archive <slug>|project unarchive <slug>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|pr link <pr-url> (<project>/<n>|--none)|repo set <repo> (--fly-app <app>|--platform <name>)|repo unset <repo> --platform <name>|repo show <repo>|upgrade|version> [--json]\n"
 
 type harness struct {
 	deps    cli.Env
@@ -671,7 +671,7 @@ func specServer(t *testing.T, status int, body string, got *specRequest) *httpte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		*got = specRequest{method: r.Method, path: r.URL.EscapedPath(), auth: r.Header.Get("Authorization")}
-		if err := json.Unmarshal(b, &got.body); err != nil {
+		if err := json.Unmarshal(b, &got.body); len(b) > 0 && err != nil {
 			t.Errorf("body %q: %v", b, err)
 		}
 		writeJSON(w, status, body)
@@ -1352,7 +1352,7 @@ func linkServer(t *testing.T, status int, body string, got *linkRequest) *httpte
 		b, _ := io.ReadAll(r.Body)
 		got.calls++
 		got.method, got.path, got.auth = r.Method, r.URL.EscapedPath(), r.Header.Get("Authorization")
-		if err := json.Unmarshal(b, &got.body); err != nil {
+		if err := json.Unmarshal(b, &got.body); len(b) > 0 && err != nil {
 			t.Errorf("body %q: %v", b, err)
 		}
 		writeJSON(w, status, body)
@@ -1487,5 +1487,207 @@ func TestPrLinkNotSignedIn(t *testing.T) {
 	}
 	if got.calls != 0 {
 		t.Errorf("the server was called: %+v", got)
+	}
+}
+
+const repoShowBody = `{"name":"colette-api","github_full_name":"colette-club/colette-api","targets":[{"platform":"fly","settings":{"app":"colette-api-prod"},"tracked":true},{"platform":"render","settings":{},"tracked":false}]}`
+
+func TestRepoSetFly(t *testing.T) {
+	var got linkRequest
+	body := `{"repo":"colette-api","platform":"fly","settings":{"app":"colette-api-prod"},"tracked":true}`
+	srv := linkServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "set", "colette-api", "--fly-app", "colette-api-prod"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Connected colette-api to the Fly app colette-api-prod.\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+	settings, _ := got.body["settings"].(map[string]any)
+	if got.method != "PUT" || got.path != "/api/repositories/colette-api/targets/fly" || got.auth != "Bearer cadre_abc" || len(got.body) != 1 || len(settings) != 1 || settings["app"] != "colette-api-prod" {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestRepoSetUntrackedPlatform(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, `{"repo":"colette-site","platform":"render","settings":{},"tracked":false}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "set", "colette-site", "--platform", "render"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "cadre can't read Render deploys yet, so colette-site shows as not tracked.\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+	settings, ok := got.body["settings"].(map[string]any)
+	if got.method != "PUT" || got.path != "/api/repositories/colette-site/targets/render" || !ok || len(settings) != 0 {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestRepoUnset(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, `{"repo":"colette-site","platform":"render"}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "unset", "colette-site", "--platform", "render"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Removed colette-site's Render target.\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+	if got.method != "DELETE" || got.path != "/api/repositories/colette-site/targets/render" || got.auth != "Bearer cadre_abc" {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestRepoShow(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, repoShowBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "show", "colette-api"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "colette-api (colette-club/colette-api)\n  Fly     app colette-api-prod\n  Render  not tracked\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+	if got.method != "GET" || got.path != "/api/repositories/colette-api" || got.auth != "Bearer cadre_abc" {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestRepoShowSortsSettings(t *testing.T) {
+	var got linkRequest
+	body := `{"name":"colette-api","github_full_name":"colette-club/colette-api","targets":[{"platform":"fly","settings":{"region":"cdg","app":"colette-api-prod"},"tracked":true}]}`
+	srv := linkServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "show", "colette-api"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "colette-api (colette-club/colette-api)\n  Fly  app colette-api-prod, region cdg\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+}
+
+func TestRepoShowWithoutTargets(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, `{"name":"colette-api","github_full_name":"colette-club/colette-api","targets":[]}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "show", "colette-api"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "colette-api (colette-club/colette-api) has no deploy target yet.\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+}
+
+func TestRepoJSON(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		body string
+	}{
+		{[]string{"repo", "set", "colette-api", "--fly-app", "colette-api-prod", "--json"}, `{"repo":"colette-api","platform":"fly","settings":{"app":"colette-api-prod"},"tracked":true}`},
+		{[]string{"repo", "set", "colette-site", "--platform", "render", "--json"}, `{"repo":"colette-site","platform":"render","settings":{},"tracked":false}`},
+		{[]string{"repo", "unset", "colette-site", "--platform", "render", "--json"}, `{"repo":"colette-site","platform":"render"}`},
+		{[]string{"repo", "show", "colette-api", "--json"}, repoShowBody},
+	} {
+		var got linkRequest
+		srv := linkServer(t, 200, tc.body, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+		if code := cli.Run(tc.args, h.deps); code != 0 || h.out.String() != tc.body {
+			t.Errorf("%q: code = %d, stdout = %q, stderr %q", tc.args, code, h.out, h.errb)
+		}
+	}
+}
+
+func TestRepoErrors(t *testing.T) {
+	set := []string{"repo", "set", "colette-api", "--fly-app", "colette-api-prod"}
+	unset := []string{"repo", "unset", "colette-api", "--platform", "render"}
+	show := []string{"repo", "show", "colette-x"}
+	cases := []struct {
+		args   []string
+		status int
+		body   string
+		want   func(server string) string
+	}{
+		{show, 404, `{"error":"repository_not_found"}`, func(server string) string { return "No repo colette-x on " + server + ".\n" }},
+		{set, 404, `{"error":"repository_not_found"}`, func(server string) string { return "No repo colette-api on " + server + ".\n" }},
+		{unset, 404, `{"error":"repository_not_found"}`, func(server string) string { return "No repo colette-api on " + server + ".\n" }},
+		{unset, 404, `{"error":"target_not_found"}`, func(string) string { return "colette-api has no Render target.\n" }},
+		{set, 503, `{"error":"platform_not_connected","platform":"fly"}`, func(server string) string {
+			return "Fly isn't connected on " + server + " yet. Set it up on its Setup page.\n"
+		}},
+		{set, 502, `{"error":"platform_unreachable","platform":"fly"}`, func(string) string { return "Cadre couldn't reach Fly. Try again in a minute.\n" }},
+		{set, 422, `{"errors":[{"path":"app","message":"is not an app in the org"}]}`, func(string) string { return "app: is not an app in the org\n" }},
+		{show, 401, `{"error":"unauthorized"}`, func(server string) string {
+			return "Your key for " + server + " is no longer valid. Run cadre login --url " + server + ".\n"
+		}},
+	}
+	for _, tc := range cases {
+		var got linkRequest
+		srv := linkServer(t, tc.status, tc.body, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+		if code := cli.Run(tc.args, h.deps); code != 1 {
+			t.Errorf("%q %d %s: code = %d", tc.args, tc.status, tc.body, code)
+		}
+		if want := tc.want(srv.URL); h.errb.String() != want {
+			t.Errorf("%q %d %s: stderr = %q, want %q", tc.args, tc.status, tc.body, h.errb, want)
+		}
+	}
+}
+
+func TestRepoUsage(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, repoShowBody, &got)
+	cases := [][]string{
+		{"repo"},
+		{"repo", "nope", "colette-api"},
+		{"repo", "set"},
+		{"repo", "set", "--fly-app", "colette-api-prod"},
+		{"repo", "set", "colette-api"},
+		{"repo", "set", "colette-api", "--fly-app", "colette-api-prod", "--platform", "render"},
+		{"repo", "set", "colette-api", "--fly-app"},
+		{"repo", "set", "colette-api", "--platform", "--fly-app"},
+		{"repo", "set", "colette-api", "other", "--fly-app", "colette-api-prod"},
+		{"repo", "unset", "colette-site"},
+		{"repo", "unset", "--platform", "render"},
+		{"repo", "unset", "colette-site", "--fly-app", "x"},
+		{"repo", "show"},
+		{"repo", "show", "colette-api", "colette-site"},
+	}
+	for _, args := range cases {
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != usageLine {
+			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
+		}
+	}
+	if got.calls != 0 {
+		t.Errorf("the server was called: %+v", got)
+	}
+}
+
+func TestRepoNotSignedIn(t *testing.T) {
+	for _, args := range [][]string{
+		{"repo", "set", "colette-api", "--fly-app", "colette-api-prod"},
+		{"repo", "unset", "colette-site", "--platform", "render"},
+		{"repo", "show", "colette-api"},
+	} {
+		var got linkRequest
+		srv := linkServer(t, 200, repoShowBody, &got)
+		h := newHarness(t, srv, nil)
+
+		if code := cli.Run(args, h.deps); code != 1 || h.errb.String() != "Not signed in. Run cadre login --url <url>.\n" {
+			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
+		}
+		if got.calls != 0 {
+			t.Errorf("the server was called: %+v", got)
+		}
 	}
 }

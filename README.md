@@ -1,6 +1,6 @@
 # cadre CLI
 
-`cadre` is the command-line client for [Cadre](https://colette-cadre.fly.dev), which shows where every milestone stands, on every repo, in deploy order. People and Claude Code (through the `cadre` skill) use it to sign in, register projects, and pull and push milestone specs.
+`cadre` is the command-line client for [Cadre](https://colette-cadre.fly.dev), which shows where every milestone stands, on every repo, in deploy order. People and Claude Code (through the `cadre` skill) use it to sign in, register projects, pull and push milestone specs, and say which platform each repo deploys to.
 
 ## Install
 
@@ -37,6 +37,9 @@ cadre spec push wish-reminders/2 spec.md --base <version>
 | `cadre spec pull <project>/<n> [-o <file>]` | Prints the newest version of milestone `<n>`'s spec exactly as stored, or writes it to `<file>`. With `--json`, prints the answer, whose `version` names that version |
 | `cadre spec push <project>/<n> <file> [--base <version>]` | Uploads a markdown file, unchanged, as the newest version of milestone `<n>`'s spec, and prints the project's page. With `--base`, the push is refused when someone pushed a newer version since that one: pull again |
 | `cadre pr link <pr-url> <project>/<n>` | Links a pull request to a milestone; `--none` unlinks it |
+| `cadre repo set <repo> (--fly-app <app>\|--platform <name>)` | Sets where a repo deploys: `--fly-app` connects it to a Fly app, which cadre then tracks; `--platform` names any other platform, which shows as not tracked. Setting a platform again replaces its settings |
+| `cadre repo unset <repo> --platform <name>` | Removes a repo's deploy target on that platform |
+| `cadre repo show <repo>` | Lists a repo's deploy targets and whether cadre can track each |
 | `cadre upgrade` | Replaces this `cadre` with the latest release on GitHub once the download matches the release's checksums, and prints both versions. It changes nothing when this is already the latest, and refuses a development build. Needs no sign-in |
 | `cadre version` | Prints the version |
 
