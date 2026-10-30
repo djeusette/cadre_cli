@@ -40,7 +40,7 @@ cadre spec push wish-reminders/2 spec.md --base <version>
 | `cadre repo set <repo> (--fly-app <app>\|--platform <name>)` | Sets where a repo deploys: `--fly-app` connects it to a Fly app, which cadre then tracks; `--platform` names any other platform, which shows as not tracked. Setting a platform again replaces its settings |
 | `cadre repo unset <repo> --platform <name>` | Removes a repo's deploy target on that platform |
 | `cadre repo show <repo>` | Lists a repo's deploy targets, the Fly org each is read through, and whether cadre can track each |
-| `cadre fly org add <org>` | Connects a Fly org with a read-only token (`fly tokens create readonly <org>`), piped in or typed when asked with echo off. Adding it again replaces the token |
+| `cadre fly org add <org>` | Connects a Fly org with a read-only token (`fly tokens create readonly -o <org> -n cadre | cadre fly org add <org>`), piped in or typed when asked with echo off. Adding it again replaces the token |
 | `cadre fly org remove <org>` | Disconnects a Fly org, unless a repo's target still reads it |
 | `cadre upgrade` | Replaces this `cadre` with the latest release on GitHub once the download matches the release's checksums, and prints both versions. It changes nothing when this is already the latest, and refuses a development build. Needs no sign-in |
 | `cadre version` | Prints the version |

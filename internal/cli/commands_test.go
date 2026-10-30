@@ -2007,3 +2007,26 @@ func TestFlyOrgNotSignedIn(t *testing.T) {
 		}
 	}
 }
+
+func TestFlyOrgPrintsTheServersName(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 200, addedBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	h.pipe("tok")
+
+	if code := cli.Run([]string{"fly", "org", "add", "ACME"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Connected the Fly org acme: its token reads 4 apps.\n"; h.out.String() != want {
+		t.Errorf("add stdout = %q", h.out)
+	}
+
+	srv = flyServer(t, 200, `{"platform":"fly","name":"acme"}`, &got)
+	h = newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	if code := cli.Run([]string{"fly", "org", "remove", "ACME"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Removed the Fly org acme.\n"; h.out.String() != want {
+		t.Errorf("remove stdout = %q", h.out)
+	}
+}

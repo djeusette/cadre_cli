@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/djeusette/cadre_cli/internal/api"
 )
@@ -59,7 +61,7 @@ func addFlyOrg(ctx context.Context, s *session, org string) int {
 		fmt.Fprint(s.env.Stdout, string(added.Raw))
 		return 0
 	}
-	fmt.Fprintf(s.env.Stdout, "Connected the Fly org %s: its token reads %s.\n", org, apps(added.Apps))
+	fmt.Fprintf(s.env.Stdout, "Connected the Fly org %s: its token reads %s.\n", added.Name, apps(added.Apps))
 	return 0
 }
 
@@ -77,7 +79,7 @@ func removeFlyOrg(ctx context.Context, s *session, org string) int {
 		fmt.Fprint(s.env.Stdout, string(removed.Raw))
 		return 0
 	}
-	fmt.Fprintf(s.env.Stdout, "Removed the Fly org %s.\n", org)
+	fmt.Fprintf(s.env.Stdout, "Removed the Fly org %s.\n", removed.Name)
 	return 0
 }
 
@@ -145,8 +147,26 @@ func (e Env) stdinIsTerminal() bool {
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
+// exitProcess ends the process on an interrupt at the token prompt; tests replace it.
+var exitProcess = os.Exit
+
+// exitInterrupted is the shell's code for a process ended by Ctrl-C.
+const exitInterrupted = 130
+
+// guardInterrupt waits for a signal on sigs. On one it runs restore, ends the prompt's line on out and calls
+// exit(130). It returns when done is closed.
+func guardInterrupt(sigs <-chan os.Signal, done <-chan struct{}, restore func(), out io.Writer, exit func(int)) {
+	select {
+	case <-sigs:
+		restore()
+		fmt.Fprintln(out)
+		exit(exitInterrupted)
+	case <-done:
+	}
+}
+
 // readSecretFromTTY reads one line from the terminal with echo off, restoring echo on every path, and ends the
-// prompt's line on out.
+// prompt's line on out. An interrupt or termination while it reads restores echo too, and exits with 130.
 func readSecretFromTTY(out io.Writer) func() (string, error) {
 	return func() (string, error) {
 		tty, err := os.Open("/dev/tty")
@@ -158,10 +178,20 @@ func readSecretFromTTY(out io.Writer) func() (string, error) {
 		if err := stty(tty, "-echo"); err != nil {
 			return "", err
 		}
+		restore := func() { _ = stty(tty, "echo") }
 		defer func() {
-			_ = stty(tty, "echo")
+			restore()
 			fmt.Fprintln(out)
 		}()
+
+		sigs := make(chan os.Signal, 1)
+		signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+		done := make(chan struct{})
+		defer func() {
+			signal.Stop(sigs)
+			close(done)
+		}()
+		go guardInterrupt(sigs, done, restore, out, exitProcess)
 
 		line, err := bufio.NewReader(tty).ReadString('\n')
 		if err != nil && !(errors.Is(err, io.EOF) && line != "") {
