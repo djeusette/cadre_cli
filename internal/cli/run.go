@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const usage = "Usage: cadre <login --url <url>|whoami|project create <file>|project pull <slug> [-o <file>]|project update <file>|project archive <slug>|project unarchive <slug>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|pr link <pr-url> (<project>/<n>|--none)|repo set <repo> (--fly-app <app>|--platform <name>)|repo unset <repo> --platform <name>|repo show <repo>|upgrade|version> [--json]"
+const usage = "Usage: cadre <login --url <url>|whoami|project create <file>|project pull <slug> [-o <file>]|project update <file>|project archive <slug>|project unarchive <slug>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|pr link <pr-url> (<project>/<n>|--none)|repo set <repo> (--fly-app <app>|--platform <name>)|repo unset <repo> --platform <name>|repo show <repo>|fly org add <org>|fly org remove <org>|upgrade|version> [--json]"
 
 // Env carries everything a command touches outside its arguments, so tests can fake it.
 type Env struct {
@@ -20,6 +20,9 @@ type Env struct {
 	GitHubURL      string                 // GitHub's API, where upgrade finds the latest release
 	Executable     func() (string, error) // the running binary, which upgrade replaces
 	Version        string
+	Stdin          io.Reader              // where a piped token comes from; the process's stdin when nil
+	Terminal       func() bool            // whether stdin is a terminal; the process's stdin mode when nil
+	ReadSecret     func() (string, error) // one line typed on the terminal with echo off; the terminal device when nil
 }
 
 // Run executes the command in args and returns the exit code: 0 ok, 1 failure, 2 usage error.
@@ -45,6 +48,8 @@ func Run(args []string, env Env) int {
 		return runPr(env, asJSON, args[1:])
 	case "repo":
 		return runRepo(env, asJSON, args[1:])
+	case "fly":
+		return runFly(env, asJSON, args[1:])
 	case "upgrade":
 		return runUpgrade(env, asJSON, args[1:])
 	default:

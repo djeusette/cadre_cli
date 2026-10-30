@@ -69,6 +69,8 @@ func setTarget(ctx context.Context, s *session, repo, platform string, settings 
 	switch {
 	case s.asJSON:
 		fmt.Fprint(s.env.Stdout, string(target.Raw))
+	case target.Tracked && target.Account != nil:
+		fmt.Fprintf(s.env.Stdout, "Connected %s to the %s app %s, in the %s org.\n", target.Repo, displayName(target.Platform), fmt.Sprint(target.Settings["app"]), *target.Account)
 	case target.Tracked:
 		fmt.Fprintf(s.env.Stdout, "Connected %s to the %s app %s.\n", target.Repo, displayName(target.Platform), fmt.Sprint(target.Settings["app"]))
 	default:
@@ -141,6 +143,9 @@ func targetState(t api.Target) string {
 	for _, key := range slices.Sorted(maps.Keys(t.Settings)) {
 		pairs = append(pairs, key+" "+fmt.Sprint(t.Settings[key]))
 	}
+	if t.Account != nil {
+		pairs = append(pairs, "org "+*t.Account)
+	}
 	if len(pairs) == 0 {
 		return "tracked"
 	}
@@ -157,7 +162,7 @@ func (s *session) repoFailure(err error, repo, platform string) int {
 	case errors.Is(err, api.ErrTargetNotFound):
 		fmt.Fprintf(s.env.Stderr, "%s has no %s target.\n", repo, name)
 	case errors.Is(err, api.ErrPlatformNotConnected):
-		fmt.Fprintf(s.env.Stderr, "%s isn't connected on %s yet. Set it up on its Setup page.\n", name, s.baseURL)
+		fmt.Fprintf(s.env.Stderr, "%s isn't connected on %s yet. Add an org with cadre fly org add <org>.\n", name, s.baseURL)
 	case errors.Is(err, api.ErrPlatformUnreachable):
 		fmt.Fprintf(s.env.Stderr, "Cadre couldn't reach %s. Try again in a minute.\n", name)
 	default:

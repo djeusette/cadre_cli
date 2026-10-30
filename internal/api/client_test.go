@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -56,7 +57,9 @@ func TestEveryCallMapsTooManyRequests(t *testing.T) {
 			_, err := c.SetTarget(ctx, "colette-api", "fly", map[string]string{"app": "colette-api-prod"})
 			return err
 		},
-		"unset target": func(c *api.Client) error { _, err := c.UnsetTarget(ctx, "colette-site", "render"); return err },
+		"unset target":   func(c *api.Client) error { _, err := c.UnsetTarget(ctx, "colette-site", "render"); return err },
+		"add account":    func(c *api.Client) error { _, err := c.AddAccount(ctx, "fly", "acme", "tok"); return err },
+		"remove account": func(c *api.Client) error { _, err := c.RemoveAccount(ctx, "fly", "acme"); return err },
 	}
 	for name, call := range calls {
 		t.Run(name, func(t *testing.T) {
@@ -668,5 +671,105 @@ func TestShowRepositoryStatuses(t *testing.T) {
 		if _, err := c.ShowRepository(context.Background(), "colette-api"); !tc.check(err) {
 			t.Errorf("%d %s: err = %v", tc.status, tc.body, err)
 		}
+	}
+}
+
+func TestAddAccount(t *testing.T) {
+	const body = `{"platform":"fly","name":"acme","apps":4}`
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		if r.Method != http.MethodPut || r.URL.EscapedPath() != "/api/platforms/fly/accounts/acme%2Fx" || r.Header.Get("Authorization") != "Bearer cadre_secret" || string(b) != `{"token":"tok"}` {
+			t.Errorf("bad request: %s %s %s %v", r.Method, r.URL.EscapedPath(), b, r.Header)
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, body)
+	})
+	got, err := c.AddAccount(context.Background(), "fly", "acme/x", "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Platform != "fly" || got.Name != "acme" || got.Apps != 4 || string(got.Raw) != body {
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestAddAccountStatuses(t *testing.T) {
+	cases := []struct {
+		status int
+		body   string
+		check  func(error) bool
+	}{
+		{404, `{"error":"platform_not_found"}`, func(err error) bool { return errors.Is(err, api.ErrPlatformNotFound) }},
+		{404, `{"error":"other"}`, func(err error) bool { var serr *api.StatusError; return errors.As(err, &serr) && serr.Status == 404 }},
+		{422, `{"error":"token_refused"}`, func(err error) bool { return errors.Is(err, api.ErrTokenRefused) }},
+		{422, `{"error":"org_not_found"}`, func(err error) bool { return errors.Is(err, api.ErrOrgNotFound) }},
+		{422, `{"errors":[{"path":"name","message":"is invalid"}]}`, func(err error) bool {
+			var verr *api.ValidationError
+			return errors.As(err, &verr) && len(verr.Errors) == 1 && verr.Errors[0] == (api.FieldError{Path: "name", Message: "is invalid"})
+		}},
+		{422, `{"error":"other"}`, func(err error) bool { var serr *api.StatusError; return errors.As(err, &serr) && serr.Status == 422 }},
+		{502, `{"error":"platform_unreachable","platform":"fly"}`, func(err error) bool { return errors.Is(err, api.ErrPlatformUnreachable) }},
+		{401, `{"error":"unauthorized"}`, func(err error) bool { return errors.Is(err, api.ErrUnauthorized) }},
+		{500, `oops`, func(err error) bool { var serr *api.StatusError; return errors.As(err, &serr) && serr.Status == 500 }},
+		{200, `oops`, func(err error) bool { return err != nil && strings.Contains(err.Error(), "status 200") }},
+	}
+	for _, tc := range cases {
+		c := newClient(t, reply(tc.status, tc.body))
+		if _, err := c.AddAccount(context.Background(), "fly", "acme", "tok"); !tc.check(err) {
+			t.Errorf("%d %s: err = %v", tc.status, tc.body, err)
+		}
+	}
+}
+
+func TestRemoveAccount(t *testing.T) {
+	const body = `{"platform":"fly","name":"acme"}`
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.EscapedPath() != "/api/platforms/fly/accounts/acme" || r.Header.Get("Authorization") != "Bearer cadre_secret" {
+			t.Errorf("bad request: %s %s %v", r.Method, r.URL.EscapedPath(), r.Header)
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, body)
+	})
+	got, err := c.RemoveAccount(context.Background(), "fly", "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Platform != "fly" || got.Name != "acme" || string(got.Raw) != body {
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestRemoveAccountStatuses(t *testing.T) {
+	cases := []struct {
+		status int
+		body   string
+		check  func(error) bool
+	}{
+		{404, `{"error":"account_not_found"}`, func(err error) bool { return errors.Is(err, api.ErrAccountNotFound) }},
+		{404, `{"error":"platform_not_found"}`, func(err error) bool { return errors.Is(err, api.ErrPlatformNotFound) }},
+		{409, `{"error":"account_in_use","repos":["colette-api","colette-web"]}`, func(err error) bool {
+			var use *api.AccountInUseError
+			return errors.As(err, &use) && slices.Equal(use.Repos, []string{"colette-api", "colette-web"})
+		}},
+		{409, `{"error":"other"}`, func(err error) bool { var serr *api.StatusError; return errors.As(err, &serr) && serr.Status == 409 }},
+		{401, `{"error":"unauthorized"}`, func(err error) bool { return errors.Is(err, api.ErrUnauthorized) }},
+		{500, `oops`, func(err error) bool { var serr *api.StatusError; return errors.As(err, &serr) && serr.Status == 500 }},
+	}
+	for _, tc := range cases {
+		c := newClient(t, reply(tc.status, tc.body))
+		if _, err := c.RemoveAccount(context.Background(), "fly", "acme"); !tc.check(err) {
+			t.Errorf("%d %s: err = %v", tc.status, tc.body, err)
+		}
+	}
+}
+
+func TestTargetCarriesItsAccount(t *testing.T) {
+	c := newClient(t, reply(200, `{"name":"colette-api","github_full_name":"x/y","targets":[{"platform":"fly","settings":{"app":"a"},"tracked":true,"account":"colette"},{"platform":"render","settings":{},"tracked":false,"account":null}]}`))
+	got, err := c.ShowRepository(context.Background(), "colette-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := got.Targets[0].Account; a == nil || *a != "colette" || got.Targets[1].Account != nil {
+		t.Errorf("targets = %+v", got.Targets)
 	}
 }

@@ -46,7 +46,22 @@ var (
 	ErrPlatformNotConnected = errors.New("platform is not connected")
 	// ErrPlatformUnreachable means the server could not reach the platform.
 	ErrPlatformUnreachable = errors.New("platform is unreachable")
+	// ErrPlatformNotFound means the server has no such platform.
+	ErrPlatformNotFound = errors.New("platform not found")
+	// ErrTokenRefused means the platform refused the token an account was added with.
+	ErrTokenRefused = errors.New("token refused")
+	// ErrOrgNotFound means the platform has no org the token can read under that name.
+	ErrOrgNotFound = errors.New("org not found")
+	// ErrAccountNotFound means the platform has no such account.
+	ErrAccountNotFound = errors.New("account not found")
 )
+
+// AccountInUseError is the server's 409 for removing an account that targets still read. Repos names them.
+type AccountInUseError struct{ Repos []string }
+
+func (e *AccountInUseError) Error() string {
+	return "account is in use by " + strings.Join(e.Repos, ", ")
+}
 
 // ProjectChangedError is the server's 409 for an update of a project that changed since it was pulled.
 // Version is the project's current version.
@@ -478,6 +493,7 @@ type Target struct {
 	Platform string         `json:"platform"`
 	Settings map[string]any `json:"settings"`
 	Tracked  bool           `json:"tracked"`
+	Account  *string        `json:"account"` // the platform account that reads it, or nil
 	Raw      []byte         `json:"-"`
 }
 
@@ -545,6 +561,90 @@ func (c *Client) UnsetTarget(ctx context.Context, repo, platform string) (Unset,
 	}
 	removed.Raw = resp
 	return removed, c.decode(status, resp, &removed)
+}
+
+// Account is a platform account added with its token; Apps is how many apps the token reads. The token is never
+// returned. Raw holds the response body as received.
+type Account struct {
+	Platform string `json:"platform"`
+	Name     string `json:"name"`
+	Apps     int    `json:"apps"`
+	Raw      []byte `json:"-"`
+}
+
+// RemovedAccount is a removed platform account. Raw holds the response body as received.
+type RemovedAccount struct {
+	Platform string `json:"platform"`
+	Name     string `json:"name"`
+	Raw      []byte `json:"-"`
+}
+
+// AddAccount connects the platform's account name with its token, or replaces the token. The server checks the
+// token against the platform first. It returns ErrPlatformNotFound, ErrTokenRefused, ErrOrgNotFound,
+// ErrPlatformUnreachable, ErrUnauthorized or a *ValidationError when the server refuses it.
+func (c *Client) AddAccount(ctx context.Context, platform, name, token string) (Account, error) {
+	var account Account
+	payload, err := json.Marshal(map[string]string{"token": token})
+	if err != nil {
+		return account, err
+	}
+	status, resp, err := c.do(ctx, http.MethodPut, accountPath(platform, name), payload)
+	if err != nil {
+		return account, err
+	}
+	if status != http.StatusOK {
+		return account, accountStatusError(status, resp)
+	}
+	account.Raw = resp
+	return account, c.decode(status, resp, &account)
+}
+
+// RemoveAccount removes the platform's account name. It returns ErrPlatformNotFound, ErrAccountNotFound,
+// *AccountInUseError or ErrUnauthorized when the server refuses it.
+func (c *Client) RemoveAccount(ctx context.Context, platform, name string) (RemovedAccount, error) {
+	var removed RemovedAccount
+	status, resp, err := c.do(ctx, http.MethodDelete, accountPath(platform, name), nil)
+	if err != nil {
+		return removed, err
+	}
+	if status != http.StatusOK {
+		return removed, accountStatusError(status, resp)
+	}
+	removed.Raw = resp
+	return removed, c.decode(status, resp, &removed)
+}
+
+// accountStatusError maps an account call's non-200 answer to its error. Both 422 shapes are told apart by body:
+// one with an error code, one with validation errors.
+func accountStatusError(status int, body []byte) error {
+	var answer struct {
+		Error string   `json:"error"`
+		Repos []string `json:"repos"`
+	}
+	_ = json.Unmarshal(body, &answer)
+	switch {
+	case status == http.StatusUnauthorized:
+		return ErrUnauthorized
+	case status == http.StatusNotFound && answer.Error == "platform_not_found":
+		return ErrPlatformNotFound
+	case status == http.StatusNotFound && answer.Error == "account_not_found":
+		return ErrAccountNotFound
+	case status == http.StatusConflict && answer.Error == "account_in_use":
+		return &AccountInUseError{Repos: answer.Repos}
+	case status == http.StatusBadGateway:
+		return ErrPlatformUnreachable
+	case status == http.StatusUnprocessableEntity && answer.Error == "token_refused":
+		return ErrTokenRefused
+	case status == http.StatusUnprocessableEntity && answer.Error == "org_not_found":
+		return ErrOrgNotFound
+	case status == http.StatusUnprocessableEntity:
+		return validationError(status, body)
+	}
+	return &StatusError{Status: status}
+}
+
+func accountPath(platform, name string) string {
+	return "/api/platforms/" + url.PathEscape(platform) + "/accounts/" + url.PathEscape(name)
 }
 
 // repositoryStatusError maps a repository call's non-200 answer to its error, telling the 404s apart by code.
