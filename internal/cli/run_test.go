@@ -47,3 +47,14 @@ func TestRunUsageNamesPrLink(t *testing.T) {
 		t.Errorf("stderr = %q", errb.String())
 	}
 }
+
+func TestRunUsageNamesRepo(t *testing.T) {
+	env, _, errb := newEnv()
+	if code := cli.Run(nil, env); code != 2 {
+		t.Errorf("code = %d, want 2", code)
+	}
+	want := "|repo set <repo> (--fly-app <app>|--platform <name>)|repo unset <repo> --platform <name>|repo show <repo>|"
+	if !strings.Contains(errb.String(), want) {
+		t.Errorf("stderr = %q", errb.String())
+	}
+}
