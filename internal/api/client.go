@@ -494,7 +494,15 @@ type Target struct {
 	Settings map[string]any `json:"settings"`
 	Tracked  bool           `json:"tracked"`
 	Account  *string        `json:"account"` // the platform account that reads it, or nil
-	Raw      []byte         `json:"-"`
+	// LastDeploy is the latest deploy cadre saw, or nil when it saw none (or the server predates deploys).
+	LastDeploy *LastDeploy `json:"last_deploy"`
+	Raw        []byte      `json:"-"`
+}
+
+// LastDeploy is a target's latest deploy. Commit is nil when cadre could not tie the deploy to a commit.
+type LastDeploy struct {
+	Commit     *string   `json:"commit"`
+	DeployedAt time.Time `json:"deployed_at"`
 }
 
 // Unset is a removed deploy target. Raw holds the response body as received.

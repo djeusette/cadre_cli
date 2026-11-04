@@ -146,10 +146,20 @@ func targetState(t api.Target) string {
 	if t.Account != nil {
 		pairs = append(pairs, "org "+*t.Account)
 	}
-	if len(pairs) == 0 {
-		return "tracked"
-	}
+	pairs = append(pairs, lastDeployText(t.LastDeploy))
 	return strings.Join(pairs, ", ")
+}
+
+// lastDeployText says when a target last deployed, in UTC, and the commit's first 7 characters.
+func lastDeployText(d *api.LastDeploy) string {
+	switch {
+	case d == nil:
+		return "no deploy seen yet"
+	case d.Commit == nil:
+		return "last deploy " + d.DeployedAt.UTC().Format("Jan 2") + " (commit unknown)"
+	default:
+		return "last deploy " + d.DeployedAt.UTC().Format("Jan 2") + " (" + (*d.Commit)[:min(7, len(*d.Commit))] + ")"
+	}
 }
 
 // repoFailure prints a failed repo call to stderr and returns exit code 1. platform is the one the person typed,
