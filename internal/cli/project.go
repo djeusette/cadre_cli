@@ -12,35 +12,35 @@ import (
 )
 
 // runProject dispatches `project create <file>`, `pull <slug> [-o <file>]`, `update <file>`,
-// `archive <slug>` and `unarchive <slug>`; any other form is a usage error.
+// `archive <slug>` and `unarchive <slug>`.
 func runProject(env Env, asJSON bool, args []string) int {
 	if len(args) == 0 {
-		return usageError(env)
+		return showHelp(env, []string{"project"})
 	}
 	rest := args[1:]
 	switch args[0] {
 	case "create":
-		return runCommand(env, asJSON, rest, 1, createProject)
+		return runCommand(env, asJSON, "project create", rest, 1, createProject)
 	case "pull":
 		output, rest, ok := takeFlag(rest, "-o")
 		if !ok {
-			return usageError(env)
+			return usageError(env, "project pull")
 		}
-		return runCommand(env, asJSON, rest, 1, func(ctx context.Context, s *session, a []string) int {
+		return runCommand(env, asJSON, "project pull", rest, 1, func(ctx context.Context, s *session, a []string) int {
 			return pullProject(ctx, s, a[0], output)
 		})
 	case "update":
-		return runCommand(env, asJSON, rest, 1, updateProject)
+		return runCommand(env, asJSON, "project update", rest, 1, updateProject)
 	case "archive":
-		return runCommand(env, asJSON, rest, 1, func(ctx context.Context, s *session, a []string) int {
+		return runCommand(env, asJSON, "project archive", rest, 1, func(ctx context.Context, s *session, a []string) int {
 			return archiveProject(ctx, s, a[0], true)
 		})
 	case "unarchive":
-		return runCommand(env, asJSON, rest, 1, func(ctx context.Context, s *session, a []string) int {
+		return runCommand(env, asJSON, "project unarchive", rest, 1, func(ctx context.Context, s *session, a []string) int {
 			return archiveProject(ctx, s, a[0], false)
 		})
 	default:
-		return usageError(env)
+		return unknownCommand(env, "project", args[0])
 	}
 }
 

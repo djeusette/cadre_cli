@@ -17,23 +17,28 @@ import (
 
 const msgNoToken = "No token given. Pipe it in, or type it when asked."
 
-// runFly dispatches `fly org add <org>` and `fly org remove <org>`; any other form is a usage error.
+// runFly dispatches `fly org add <org>` and `fly org remove <org>`.
 func runFly(env Env, asJSON bool, args []string) int {
-	if len(args) < 2 || args[0] != "org" {
-		return usageError(env)
+	switch {
+	case len(args) == 0:
+		return showHelp(env, []string{"fly"})
+	case args[0] != "org":
+		return unknownCommand(env, "fly", args[0])
+	case len(args) == 1:
+		return showHelp(env, []string{"fly", "org"})
 	}
 	rest := args[2:]
 	switch args[1] {
 	case "add":
-		return runCommand(env, asJSON, rest, 1, func(ctx context.Context, s *session, a []string) int {
+		return runCommand(env, asJSON, "fly org add", rest, 1, func(ctx context.Context, s *session, a []string) int {
 			return addFlyOrg(ctx, s, a[0])
 		})
 	case "remove":
-		return runCommand(env, asJSON, rest, 1, func(ctx context.Context, s *session, a []string) int {
+		return runCommand(env, asJSON, "fly org remove", rest, 1, func(ctx context.Context, s *session, a []string) int {
 			return removeFlyOrg(ctx, s, a[0])
 		})
 	default:
-		return usageError(env)
+		return unknownCommand(env, "fly org", args[1])
 	}
 }
 

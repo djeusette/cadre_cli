@@ -25,6 +25,8 @@ cadre spec push wish-reminders/2 spec.md --base <version>
 
 ## Commands
 
+`cadre help` lists every command, and `cadre help <command>` or `cadre <command> --help` gives its arguments, flags and examples.
+
 | Command | What it does |
 | --- | --- |
 | `cadre login --url <url>` | Signs in to the Cadre at `<url>` from the browser, and stores that URL and a personal API key. The URL is required |
@@ -44,6 +46,7 @@ cadre spec push wish-reminders/2 spec.md --base <version>
 | `cadre fly org remove <org>` | Disconnects a Fly org, unless a repo's target still reads it |
 | `cadre upgrade` | Replaces this `cadre` with the latest release on GitHub once the download matches the release's checksums, and prints both versions. It changes nothing when this is already the latest, and refuses a development build. Needs no sign-in |
 | `cadre version` | Prints the version |
+| `cadre help [<command>]` | Prints help for a command or a group such as `project`, or every command with none. Needs no sign-in |
 
 Add `--json` to any command for machine-readable output.
 

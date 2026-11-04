@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-const usage = "Usage: cadre <login --url <url>|whoami|project create <file>|project pull <slug> [-o <file>]|project update <file>|project archive <slug>|project unarchive <slug>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|pr link <pr-url> (<project>/<n>|--none)|repo set <repo> (--fly-app <app>|--platform <name>)|repo unset <repo> --platform <name>|repo show <repo>|fly org add <org>|fly org remove <org>|upgrade|version> [--json]"
-
 // Env carries everything a command touches outside its arguments, so tests can fake it.
 type Env struct {
 	Stdout, Stderr io.Writer
@@ -28,8 +26,9 @@ type Env struct {
 // Run executes the command in args and returns the exit code: 0 ok, 1 failure, 2 usage error.
 func Run(args []string, env Env) int {
 	args, asJSON := splitBoolFlag(args, "--json")
-	if len(args) == 0 {
-		return usageError(env)
+	args, wantsHelp := helpRequest(args)
+	if wantsHelp || len(args) == 0 {
+		return showHelp(env, args)
 	}
 
 	switch args[0] {
@@ -39,7 +38,7 @@ func Run(args []string, env Env) int {
 	case "login":
 		return runLogin(env, asJSON, args[1:])
 	case "whoami":
-		return runCommand(env, asJSON, args[1:], 0, whoami)
+		return runCommand(env, asJSON, "whoami", args[1:], 0, whoami)
 	case "project":
 		return runProject(env, asJSON, args[1:])
 	case "spec":
@@ -53,7 +52,7 @@ func Run(args []string, env Env) int {
 	case "upgrade":
 		return runUpgrade(env, asJSON, args[1:])
 	default:
-		return usageError(env)
+		return unknownCommand(env, "", args[0])
 	}
 }
 
@@ -70,9 +69,4 @@ func splitBoolFlag(args []string, name string) ([]string, bool) {
 		rest = append(rest, a)
 	}
 	return rest, found
-}
-
-func usageError(env Env) int {
-	fmt.Fprintln(env.Stderr, usage)
-	return 2
 }

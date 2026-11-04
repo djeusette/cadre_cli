@@ -22,14 +22,14 @@ const (
 func runLogin(env Env, asJSON bool, args []string) int {
 	raw, ok := loginURLArg(args)
 	if !ok {
-		return usageError(env)
+		return usageError(env, "login")
 	}
 	serverURL, ok := parseServerURL(raw)
 	if !ok {
 		fmt.Fprintln(env.Stderr, msgBadURL)
 		return 2
 	}
-	return runAgainst(env, asJSON, nil, 0, func(config.Config) string { return serverURL }, login)
+	return runAgainst(env, asJSON, "login", nil, 0, func(config.Config) string { return serverURL }, login)
 }
 
 func loginURLArg(args []string) (string, bool) {
