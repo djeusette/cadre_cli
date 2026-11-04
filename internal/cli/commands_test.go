@@ -1491,7 +1491,7 @@ func TestPrLinkNotSignedIn(t *testing.T) {
 	}
 }
 
-const repoShowBody = `{"name":"colette-api","github_full_name":"colette-club/colette-api","targets":[{"platform":"fly","settings":{"app":"colette-api-prod"},"tracked":true,"account":"colette"},{"platform":"render","settings":{},"tracked":false,"account":null}]}`
+const repoShowBody = `{"name":"colette-api","github_full_name":"colette-club/colette-api","targets":[{"platform":"fly","settings":{"app":"colette-api-prod"},"tracked":true,"account":"colette","last_deploy":{"commit":"4370c48d1f0e9a3b5c6d7e8f90a1b2c3d4e5f607","deployed_at":"2026-11-03T14:05:00Z"}},{"platform":"render","settings":{},"tracked":false,"account":null}]}`
 
 func TestRepoSetFly(t *testing.T) {
 	var got linkRequest
@@ -1584,7 +1584,7 @@ func TestRepoShowPrintsAnySettingValue(t *testing.T) {
 	if code := cli.Run([]string{"repo", "show", "colette-api"}, h.deps); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, h.errb)
 	}
-	if want := "colette-api (colette-club/colette-api)\n  Fly  app colette-api-prod, port 8080, org colette\n"; h.out.String() != want {
+	if want := "colette-api (colette-club/colette-api)\n  Fly  app colette-api-prod, port 8080, org colette, no deploy seen yet\n"; h.out.String() != want {
 		t.Errorf("stdout = %q", h.out)
 	}
 }
@@ -1597,11 +1597,33 @@ func TestRepoShow(t *testing.T) {
 	if code := cli.Run([]string{"repo", "show", "colette-api"}, h.deps); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, h.errb)
 	}
-	if want := "colette-api (colette-club/colette-api)\n  Fly     app colette-api-prod, org colette\n  Render  not tracked\n"; h.out.String() != want {
+	if want := "colette-api (colette-club/colette-api)\n  Fly     app colette-api-prod, org colette, last deploy Nov 3 (4370c48)\n  Render  not tracked\n"; h.out.String() != want {
 		t.Errorf("stdout = %q", h.out)
 	}
 	if got.method != "GET" || got.path != "/api/repositories/colette-api" || got.auth != "Bearer cadre_abc" {
 		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestRepoShowLastDeploy(t *testing.T) {
+	for name, tc := range map[string]struct{ lastDeploy, want string }{
+		"a commit":         {`,"last_deploy":{"commit":"4370c48d1f0e9a3b5c6d7e8f90a1b2c3d4e5f607","deployed_at":"2026-11-03T14:05:00Z"}`, "last deploy Nov 3 (4370c48)"},
+		"no commit":        {`,"last_deploy":{"commit":null,"deployed_at":"2026-11-03T14:05:00Z"}`, "last deploy Nov 3 (commit unknown)"},
+		"null":             {`,"last_deploy":null`, "no deploy seen yet"},
+		"key absent":       {``, "no deploy seen yet"},
+		"dates are in UTC": {`,"last_deploy":{"commit":null,"deployed_at":"2026-11-03T23:30:00-05:00"}`, "last deploy Nov 4 (commit unknown)"},
+	} {
+		var got linkRequest
+		body := `{"name":"colette-api","github_full_name":"colette-club/colette-api","targets":[{"platform":"fly","settings":{"app":"colette-api-prod"},"tracked":true,"account":"colette"` + tc.lastDeploy + `}]}`
+		srv := linkServer(t, 200, body, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+		if code := cli.Run([]string{"repo", "show", "colette-api"}, h.deps); code != 0 {
+			t.Fatalf("%s: code = %d, stderr %q", name, code, h.errb)
+		}
+		if want := "colette-api (colette-club/colette-api)\n  Fly  app colette-api-prod, org colette, " + tc.want + "\n"; h.out.String() != want {
+			t.Errorf("%s: stdout = %q, want %q", name, h.out, want)
+		}
 	}
 }
 
@@ -1614,7 +1636,7 @@ func TestRepoShowSortsSettings(t *testing.T) {
 	if code := cli.Run([]string{"repo", "show", "colette-api"}, h.deps); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, h.errb)
 	}
-	if want := "colette-api (colette-club/colette-api)\n  Fly  app colette-api-prod, region cdg\n"; h.out.String() != want {
+	if want := "colette-api (colette-club/colette-api)\n  Fly  app colette-api-prod, region cdg, no deploy seen yet\n"; h.out.String() != want {
 		t.Errorf("stdout = %q", h.out)
 	}
 }
