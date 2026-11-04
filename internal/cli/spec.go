@@ -17,10 +17,10 @@ import (
 var specRef = regexp.MustCompile(`^([a-z0-9]+(?:-[a-z0-9]+)*)/([1-9][0-9]*)$`)
 
 // runSpec dispatches `spec pull <project>/<n> [-o <file>]` and
-// `spec push <project>/<n> <file> [--base <version>]`; any other form is a usage error.
+// `spec push <project>/<n> <file> [--base <version>]`.
 func runSpec(env Env, asJSON bool, args []string) int {
-	if len(args) < 2 {
-		return usageError(env)
+	if len(args) == 0 {
+		return showHelp(env, []string{"spec"})
 	}
 	switch args[0] {
 	case "pull":
@@ -28,38 +28,38 @@ func runSpec(env Env, asJSON bool, args []string) int {
 	case "push":
 		return runPush(env, asJSON, args[1:])
 	default:
-		return usageError(env)
+		return unknownCommand(env, "spec", args[0])
 	}
 }
 
 func runPull(env Env, asJSON bool, args []string) int {
 	output, rest, ok := takeFlag(args, "-o")
 	if !ok || len(rest) == 0 {
-		return usageError(env)
+		return usageError(env, "spec pull")
 	}
 	slug, number, ok := parseSpecRef(rest[0])
 	if !ok {
-		return usageError(env)
+		return usageError(env, "spec pull")
 	}
 	pull := func(ctx context.Context, s *session, _ []string) int {
 		return pullSpec(ctx, s, slug, number, output)
 	}
-	return runCommand(env, asJSON, rest[1:], 0, pull)
+	return runCommand(env, asJSON, "spec pull", rest[1:], 0, pull)
 }
 
 func runPush(env Env, asJSON bool, args []string) int {
 	base, rest, ok := takeFlag(args, "--base")
 	if !ok || len(rest) == 0 {
-		return usageError(env)
+		return usageError(env, "spec push")
 	}
 	slug, number, ok := parseSpecRef(rest[0])
 	if !ok {
-		return usageError(env)
+		return usageError(env, "spec push")
 	}
 	push := func(ctx context.Context, s *session, files []string) int {
 		return pushSpec(ctx, s, slug, number, files[0], base)
 	}
-	return runCommand(env, asJSON, rest[1:], 1, push)
+	return runCommand(env, asJSON, "spec push", rest[1:], 1, push)
 }
 
 // takeFlag removes the flag name and its value, written `name value` or `name=value`, from args.

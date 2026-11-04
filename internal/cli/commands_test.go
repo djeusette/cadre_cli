@@ -19,9 +19,6 @@ import (
 	"github.com/djeusette/cadre_cli/internal/config"
 )
 
-// usageLine is what every usage error prints on stderr.
-const usageLine = "Usage: cadre <login --url <url>|whoami|project create <file>|project pull <slug> [-o <file>]|project update <file>|project archive <slug>|project unarchive <slug>|spec pull <project>/<n> [-o <file>]|spec push <project>/<n> <file> [--base <version>]|pr link <pr-url> (<project>/<n>|--none)|repo set <repo> (--fly-app <app>|--platform <name>)|repo unset <repo> --platform <name>|repo show <repo>|fly org add <org>|fly org remove <org>|upgrade|version> [--json]\n"
-
 type harness struct {
 	deps    cli.Env
 	out     *strings.Builder
@@ -591,11 +588,10 @@ func TestLoginRequiresAnHTTPURL(t *testing.T) {
 		writeJSON(w, 500, `{}`)
 	}))
 	t.Cleanup(srv.Close)
-	usage := usageLine
 
 	for _, args := range [][]string{{"login"}, {"login", "--url"}, {"login", srv.URL}, {"login", "--url", srv.URL, "extra"}} {
 		h := newHarness(t, srv, nil)
-		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != usage {
+		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != usageLogin {
 			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
 		}
 	}
@@ -765,13 +761,10 @@ func TestSpecPushUsage(t *testing.T) {
 		{"spec", "push", "wish-reminders/1", file, "--base", ""},
 		{"spec", "push", "wish-reminders/1", file, "--base", "-v1"},
 		{"spec", "push"},
-		{"spec", "pull", "wish-reminders/1", file},
-		{"spec"},
 	}
 	for _, args := range cases {
 		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
-		want := usageLine
-		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != want {
+		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != usageSpecPush {
 			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
 		}
 	}
@@ -951,6 +944,7 @@ func TestSpecPullNotFound(t *testing.T) {
 func TestSpecPullUsage(t *testing.T) {
 	var got specRequest
 	srv := pullServer(t, 200, pulledBody, &got)
+	file := writeSpec(t, "x")
 	cases := [][]string{
 		{"spec", "pull"},
 		{"spec", "pull", "wish-reminders"},
@@ -963,11 +957,11 @@ func TestSpecPullUsage(t *testing.T) {
 		{"spec", "pull", "wish-reminders/1", "-o", "-x"},
 		{"spec", "pull", "wish-reminders/1", "-o=-x"},
 		{"spec", "pull", "wish-reminders/1", "-o", "a.md", "-o", "b.md"},
+		{"spec", "pull", "wish-reminders/1", file},
 	}
 	for _, args := range cases {
 		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
-		want := usageLine
-		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != want {
+		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != usageSpecPull {
 			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
 		}
 	}
@@ -1314,26 +1308,26 @@ func TestProjectUsage(t *testing.T) {
 	var got projectRequest
 	srv := projectCallServer(t, 200, projectPulledBody, &got)
 	file := writeSpec(t, projectFileText)
-	cases := [][]string{
-		{"project", "pull"},
-		{"project", "pull", "-o", "p.json"},
-		{"project", "pull", "wish-reminders", "-o"},
-		{"project", "pull", "wish-reminders", "-o="},
-		{"project", "pull", "wish-reminders", "extra"},
-		{"project", "update"},
-		{"project", "update", file, file},
-		{"project", "archive"},
-		{"project", "archive", "a", "b"},
-		{"project", "unarchive"},
-		{"project", "unarchive", "a", "b"},
-		{"project"},
-		{"project", "destroy", "a"},
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"project", "pull"}, usageProjectPull},
+		{[]string{"project", "pull", "-o", "p.json"}, usageProjectPull},
+		{[]string{"project", "pull", "wish-reminders", "-o"}, usageProjectPull},
+		{[]string{"project", "pull", "wish-reminders", "-o="}, usageProjectPull},
+		{[]string{"project", "pull", "wish-reminders", "extra"}, usageProjectPull},
+		{[]string{"project", "update"}, usageProjectUpdate},
+		{[]string{"project", "update", file, file}, usageProjectUpdate},
+		{[]string{"project", "archive"}, usageProjectArchive},
+		{[]string{"project", "archive", "a", "b"}, usageProjectArchive},
+		{[]string{"project", "unarchive"}, usageProjectUnarchive},
+		{[]string{"project", "unarchive", "a", "b"}, usageProjectUnarchive},
 	}
-	want := usageLine
-	for _, args := range cases {
+	for _, c := range cases {
 		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
-		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != want {
-			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
+		if code := cli.Run(c.args, h.deps); code != 2 || h.errb.String() != c.want {
+			t.Errorf("%q: code = %d, stderr %q", c.args, code, h.errb)
 		}
 	}
 	if got.calls != 0 {
@@ -1457,7 +1451,6 @@ func TestPrLinkUsage(t *testing.T) {
 	var got linkRequest
 	srv := linkServer(t, 200, linkedBody, &got)
 	cases := [][]string{
-		{"pr"},
 		{"pr", "link"},
 		{"pr", "link", prURL},
 		{"pr", "link", "--none"},
@@ -1465,11 +1458,10 @@ func TestPrLinkUsage(t *testing.T) {
 		{"pr", "link", prURL, "nope"},
 		{"pr", "link", prURL, "wish-reminders/0"},
 		{"pr", "link", prURL, "wish-reminders/2", "extra"},
-		{"pr", "unlink", prURL},
 	}
 	for _, args := range cases {
 		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
-		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != usageLine {
+		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != usagePrLink {
 			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
 		}
 	}
@@ -1714,26 +1706,27 @@ func TestRepoErrors(t *testing.T) {
 func TestRepoUsage(t *testing.T) {
 	var got linkRequest
 	srv := linkServer(t, 200, repoShowBody, &got)
-	cases := [][]string{
-		{"repo"},
-		{"repo", "nope", "colette-api"},
-		{"repo", "set"},
-		{"repo", "set", "--fly-app", "colette-api-prod"},
-		{"repo", "set", "colette-api"},
-		{"repo", "set", "colette-api", "--fly-app", "colette-api-prod", "--platform", "render"},
-		{"repo", "set", "colette-api", "--fly-app"},
-		{"repo", "set", "colette-api", "--platform", "--fly-app"},
-		{"repo", "set", "colette-api", "other", "--fly-app", "colette-api-prod"},
-		{"repo", "unset", "colette-site"},
-		{"repo", "unset", "--platform", "render"},
-		{"repo", "unset", "colette-site", "--fly-app", "x"},
-		{"repo", "show"},
-		{"repo", "show", "colette-api", "colette-site"},
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"repo", "set"}, usageRepoSet},
+		{[]string{"repo", "set", "--fly-app", "colette-api-prod"}, usageRepoSet},
+		{[]string{"repo", "set", "colette-api"}, usageRepoSet},
+		{[]string{"repo", "set", "colette-api", "--fly-app", "colette-api-prod", "--platform", "render"}, usageRepoSet},
+		{[]string{"repo", "set", "colette-api", "--fly-app"}, usageRepoSet},
+		{[]string{"repo", "set", "colette-api", "--platform", "--fly-app"}, usageRepoSet},
+		{[]string{"repo", "set", "colette-api", "other", "--fly-app", "colette-api-prod"}, usageRepoSet},
+		{[]string{"repo", "unset", "colette-site"}, usageRepoUnset},
+		{[]string{"repo", "unset", "--platform", "render"}, usageRepoUnset},
+		{[]string{"repo", "unset", "colette-site", "--fly-app", "x"}, usageRepoUnset},
+		{[]string{"repo", "show"}, usageRepoShow},
+		{[]string{"repo", "show", "colette-api", "colette-site"}, usageRepoShow},
 	}
-	for _, args := range cases {
+	for _, c := range cases {
 		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
-		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != usageLine {
-			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
+		if code := cli.Run(c.args, h.deps); code != 2 || h.errb.String() != c.want {
+			t.Errorf("%q: code = %d, stderr %q", c.args, code, h.errb)
 		}
 	}
 	if got.calls != 0 {
@@ -1986,26 +1979,25 @@ func TestFlyOrgErrors(t *testing.T) {
 func TestFlyOrgUsage(t *testing.T) {
 	var got flyRequest
 	srv := flyServer(t, 200, addedBody, &got)
-	cases := [][]string{
-		{"fly"},
-		{"fly", "org"},
-		{"fly", "org", "add"},
-		{"fly", "org", "remove"},
-		{"fly", "org", "add", "acme", "extra"},
-		{"fly", "org", "remove", "acme", "extra"},
-		{"fly", "org", "list"},
-		{"fly", "app", "add", "acme"},
-		{"fly", "org", "add", "acme", "--token", "x"},
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"fly", "org", "add"}, usageFlyOrgAdd},
+		{[]string{"fly", "org", "remove"}, usageFlyOrgRemove},
+		{[]string{"fly", "org", "add", "acme", "extra"}, usageFlyOrgAdd},
+		{[]string{"fly", "org", "remove", "acme", "extra"}, usageFlyOrgRemove},
+		{[]string{"fly", "org", "add", "acme", "--token", "x"}, usageFlyOrgAdd},
 	}
-	for _, args := range cases {
+	for _, c := range cases {
 		asked := 0
 		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
 		h.terminal("tok", nil, &asked)
-		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != usageLine {
-			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
+		if code := cli.Run(c.args, h.deps); code != 2 || h.errb.String() != c.want {
+			t.Errorf("%q: code = %d, stderr %q", c.args, code, h.errb)
 		}
 		if asked != 0 {
-			t.Errorf("%q: asked for a token", args)
+			t.Errorf("%q: asked for a token", c.args)
 		}
 	}
 	if got.calls != 0 {

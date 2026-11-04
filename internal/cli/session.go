@@ -26,15 +26,15 @@ type session struct {
 
 type command func(ctx context.Context, s *session, args []string) int
 
-// runCommand checks the argument count, loads the config and runs cmd against the stored server.
-func runCommand(env Env, asJSON bool, args []string, wantArgs int, cmd command) int {
-	return runAgainst(env, asJSON, args, wantArgs, config.BaseURL, cmd)
+// runCommand checks the argument count of the named command, loads the config and runs cmd against the stored server.
+func runCommand(env Env, asJSON bool, name string, args []string, wantArgs int, cmd command) int {
+	return runAgainst(env, asJSON, name, args, wantArgs, config.BaseURL, cmd)
 }
 
 // runAgainst is runCommand with the server URL taken from serverURL(config) instead.
-func runAgainst(env Env, asJSON bool, args []string, wantArgs int, serverURL func(config.Config) string, cmd command) int {
+func runAgainst(env Env, asJSON bool, name string, args []string, wantArgs int, serverURL func(config.Config) string, cmd command) int {
 	if len(args) != wantArgs {
-		return usageError(env)
+		return usageError(env, name)
 	}
 
 	cfgPath, err := config.Path(env.Getenv)

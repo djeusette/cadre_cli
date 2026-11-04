@@ -8,10 +8,13 @@ import (
 	"github.com/djeusette/cadre_cli/internal/api"
 )
 
-// runPr dispatches `pr link <pr-url> (<project>/<n>|--none)`; any other form is a usage error.
+// runPr dispatches `pr link <pr-url> (<project>/<n>|--none)`.
 func runPr(env Env, asJSON bool, args []string) int {
-	if len(args) == 0 || args[0] != "link" {
-		return usageError(env)
+	switch {
+	case len(args) == 0:
+		return showHelp(env, []string{"pr"})
+	case args[0] != "link":
+		return unknownCommand(env, "pr", args[0])
 	}
 	return runLink(env, asJSON, args[1:])
 }
@@ -19,17 +22,17 @@ func runPr(env Env, asJSON bool, args []string) int {
 func runLink(env Env, asJSON bool, args []string) int {
 	args, none := splitBoolFlag(args, "--none")
 	if len(args) == 0 {
-		return usageError(env)
+		return usageError(env, "pr link")
 	}
 	prURL := args[0]
 	milestone, rest, ok := linkTarget(args[1:], none)
 	if !ok {
-		return usageError(env)
+		return usageError(env, "pr link")
 	}
 	link := func(ctx context.Context, s *session, _ []string) int {
 		return linkPullRequest(ctx, s, prURL, milestone)
 	}
-	return runCommand(env, asJSON, rest, 0, link)
+	return runCommand(env, asJSON, "pr link", rest, 0, link)
 }
 
 // linkTarget takes the milestone a link names from the arguments after the URL: none with --none, or else the

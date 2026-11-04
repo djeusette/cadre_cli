@@ -12,27 +12,27 @@ import (
 )
 
 // runRepo dispatches `repo set <repo> (--fly-app <app>|--platform <name>)`, `repo unset <repo> --platform <name>`
-// and `repo show <repo>`; any other form is a usage error.
+// and `repo show <repo>`.
 func runRepo(env Env, asJSON bool, args []string) int {
 	if len(args) == 0 {
-		return usageError(env)
+		return showHelp(env, []string{"repo"})
 	}
 	rest := args[1:]
 	switch args[0] {
 	case "set":
 		flyApp, rest, ok := takeFlag(rest, "--fly-app")
 		if !ok {
-			return usageError(env)
+			return usageError(env, "repo set")
 		}
 		platform, rest, ok := takeFlag(rest, "--platform")
 		if !ok || (flyApp == "") == (platform == "") {
-			return usageError(env)
+			return usageError(env, "repo set")
 		}
 		settings := map[string]string{}
 		if flyApp != "" {
 			platform, settings["app"] = "fly", flyApp
 		}
-		return runCommand(env, asJSON, rest, 1, func(ctx context.Context, s *session, a []string) int {
+		return runCommand(env, asJSON, "repo set", rest, 1, func(ctx context.Context, s *session, a []string) int {
 			if flyApp == "" && strings.EqualFold(platform, "fly") {
 				fmt.Fprintf(s.env.Stderr, "Fly has its own flag: cadre repo set %s --fly-app <app>.\n", a[0])
 				return 1
@@ -42,17 +42,17 @@ func runRepo(env Env, asJSON bool, args []string) int {
 	case "unset":
 		platform, rest, ok := takeFlag(rest, "--platform")
 		if !ok || platform == "" {
-			return usageError(env)
+			return usageError(env, "repo unset")
 		}
-		return runCommand(env, asJSON, rest, 1, func(ctx context.Context, s *session, a []string) int {
+		return runCommand(env, asJSON, "repo unset", rest, 1, func(ctx context.Context, s *session, a []string) int {
 			return unsetTarget(ctx, s, a[0], platform)
 		})
 	case "show":
-		return runCommand(env, asJSON, rest, 1, func(ctx context.Context, s *session, a []string) int {
+		return runCommand(env, asJSON, "repo show", rest, 1, func(ctx context.Context, s *session, a []string) int {
 			return showRepository(ctx, s, a[0])
 		})
 	default:
-		return usageError(env)
+		return unknownCommand(env, "repo", args[0])
 	}
 }
 

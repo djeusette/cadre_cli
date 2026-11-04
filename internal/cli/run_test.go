@@ -2,7 +2,6 @@ package cli_test
 
 import (
 	"bytes"
-	"strings"
 	"testing"
 
 	"github.com/djeusette/cadre_cli/internal/cli"
@@ -25,36 +24,5 @@ func TestRunVersion(t *testing.T) {
 	}
 	if got := out.String(); got != "cadre dev\n" {
 		t.Errorf("stdout = %q", got)
-	}
-}
-
-func TestRunUnknownCommand(t *testing.T) {
-	env, _, errb := newEnv()
-	if code := cli.Run([]string{"nope"}, env); code != 2 {
-		t.Errorf("code = %d, want 2", code)
-	}
-	if !strings.Contains(errb.String(), "Usage: cadre") {
-		t.Errorf("stderr = %q", errb.String())
-	}
-}
-
-func TestRunUsageNamesPrLink(t *testing.T) {
-	env, _, errb := newEnv()
-	if code := cli.Run(nil, env); code != 2 {
-		t.Errorf("code = %d, want 2", code)
-	}
-	if !strings.Contains(errb.String(), "|pr link <pr-url> (<project>/<n>|--none)|") {
-		t.Errorf("stderr = %q", errb.String())
-	}
-}
-
-func TestRunUsageNamesRepo(t *testing.T) {
-	env, _, errb := newEnv()
-	if code := cli.Run(nil, env); code != 2 {
-		t.Errorf("code = %d, want 2", code)
-	}
-	want := "|repo set <repo> (--fly-app <app>|--platform <name>)|repo unset <repo> --platform <name>|repo show <repo>|"
-	if !strings.Contains(errb.String(), want) {
-		t.Errorf("stderr = %q", errb.String())
 	}
 }

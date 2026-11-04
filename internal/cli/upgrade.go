@@ -35,7 +35,7 @@ type upgraded struct {
 // It talks to GitHub only, never to a Cadre server, so it needs no sign-in.
 func runUpgrade(env Env, asJSON bool, args []string) int {
 	if len(args) != 0 {
-		return usageError(env)
+		return usageError(env, "upgrade")
 	}
 	current, ok := parseVersion(env.Version)
 	if !ok {
