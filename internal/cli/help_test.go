@@ -26,7 +26,7 @@ const (
 	usageSpecPull         = "Usage: cadre spec pull <project>/<n> [-o <file>]\nRun cadre help spec pull for details.\n"
 	usageSpecPush         = "Usage: cadre spec push <project>/<n> <file> [--base <version>]\nRun cadre help spec push for details.\n"
 	usagePrLink           = "Usage: cadre pr link <pr-url> <project>/<n>\n       cadre pr link <pr-url> --none\nRun cadre help pr link for details.\n"
-	usageRepoSet          = "Usage: cadre repo set <repo> --fly-app <app> [--fly-config <file>]\n       cadre repo set <repo> --platform <name>\nRun cadre help repo set for details.\n"
+	usageRepoSet          = "Usage: cadre repo set <repo> --fly-app <app> [--fly-config <file>] [--status-url <u>]\n       cadre repo set <repo> --platform <name>\nRun cadre help repo set for details.\n"
 	usageRepoUnset        = "Usage: cadre repo unset <repo> --platform <name>\nRun cadre help repo unset for details.\n"
 	usageRepoShow         = "Usage: cadre repo show <repo>\nRun cadre help repo show for details.\n"
 	usageDeploy           = "Usage: cadre deploy <repo> [--yes]\nRun cadre help deploy for details.\n"
@@ -200,6 +200,26 @@ func TestDeployConfigIsDocumentedInStep(t *testing.T) {
 		}
 		if strings.Contains(said, "never decides") { // a committed link can still lead to an ignored file
 			t.Errorf("%s overclaims", name)
+		}
+	}
+}
+
+// The help and the README both name the status line repo show prints.
+func TestRepoShowStatusLineIsDocumented(t *testing.T) {
+	srv, _ := helpServer(t)
+	h := newHarness(t, srv, nil)
+	if code := cli.Run([]string{"help", "repo", "show"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := "A line under the target gives its status URL, if it has one, and whether the app is live: live, not live since when, or not checked yet"
+	for name, text := range map[string]string{"help": h.out.String(), "README": string(readme)} {
+		if !strings.Contains(strings.Join(strings.Fields(text), " "), want) {
+			t.Errorf("%s doesn't say %q", name, want)
 		}
 	}
 }

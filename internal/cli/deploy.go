@@ -37,6 +37,7 @@ type deployment struct {
 	checkout   git.Checkout
 	commit     string         // the full commit main and origin/main agree on
 	settings   map[string]any // the fly target's
+	statusURL  string         // the fly target's, or empty
 	app        string
 	config     string
 	fly        string // the path to flyctl or fly
@@ -161,6 +162,7 @@ func findApp(_ context.Context, d *deployment) error {
 	targets := d.repository.Targets
 	if i := slices.IndexFunc(targets, func(t api.Target) bool { return t.Platform == "fly" }); i >= 0 {
 		d.settings = targets[i].Settings
+		d.statusURL = targets[i].StatusURL
 	}
 	app, _ := d.settings["app"].(string)
 	if app == "" {
@@ -214,8 +216,31 @@ func (d *deployment) useConfig(file string) error {
 }
 
 func (d *deployment) noConfig(missing string) error {
-	return fmt.Errorf("%s in this checkout. Set the right file with cadre repo set %s --fly-app %s --fly-config <file>.",
-		missing, d.repository.Name, d.app)
+	return fmt.Errorf("%s in this checkout. Set the right file with cadre repo set %s --fly-app %s%s.",
+		missing, d.repository.Name, d.app, d.configFlags())
+}
+
+// configFlags are what the person passes to repo set, which replaces the target, so they keep its status URL. The person
+// pastes them, so a URL that can't be quoted safely is left out for them to fill in. One that can goes before
+// --fly-config, as the sentence's full stop would stick to it at the end of a pasted command.
+func (d *deployment) configFlags() string {
+	switch {
+	case d.statusURL == "":
+		return " --fly-config <file>"
+	case quotable(d.statusURL):
+		return " --status-url '" + d.statusURL + "' --fly-config <file>"
+	default:
+		return " --fly-config <file> --status-url <url> (see cadre repo show)"
+	}
+}
+
+// quotableChars are the characters of a URL that mean nothing inside single quotes in POSIX shells and fish. ' and \ are
+// out: fish reads \' and \\ inside them as escapes.
+const quotableChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~:/?#[]@!$&()*+,;=%"
+
+// quotable reports whether url holds only quotableChars.
+func quotable(url string) bool {
+	return strings.Trim(url, quotableChars) == ""
 }
 
 // inCheckout reports whether file, relative to the top level, is a file on disk, following links. A folder, or a link
