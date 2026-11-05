@@ -2211,3 +2211,21 @@ func TestRepoShowPrintsNoStatusLineWithoutAURL(t *testing.T) {
 		}
 	}
 }
+
+func TestRepoShowPrintsAStatusURLOnOneLine(t *testing.T) {
+	var got linkRequest
+	body := `{"name":"colette-api","github_full_name":"colette-club/colette-api","targets":[{"platform":"fly","settings":{"app":"colette-api-prod"},"tracked":true,"account":"colette","status_url":"https://app.test/\u001b[2J\nFake: line","live":"live","not_live_since":null}]}`
+	srv := linkServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "show", "colette-api"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	want := "colette-api (colette-club/colette-api)\n  Fly  app colette-api-prod, org colette, no deploy seen yet\n  Status URL https://app.test/ [2J Fake: line: live\n"
+	if h.out.String() != want {
+		t.Errorf("stdout = %q, want %q", h.out, want)
+	}
+	if strings.ContainsRune(h.out.String(), '\x1b') {
+		t.Errorf("stdout has an escape: %q", h.out)
+	}
+}

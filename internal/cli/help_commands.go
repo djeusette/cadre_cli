@@ -172,7 +172,7 @@ a milestone number, such as wish-reminders/2.`,
 			{
 				name:    "repo set",
 				summary: "Say where a repo deploys",
-				forms:   []string{"<repo> --fly-app <app> [--fly-config <file>]", "<repo> --fly-app <app> [--status-url <url>]", "<repo> --platform <name>"},
+				forms:   []string{"<repo> --fly-app <app> [--fly-config <file>] [--status-url <u>]", "<repo> --platform <name>"},
 				about: `<repo> is the repo's name in Cadre, such as shop-api. Setting a platform again
 replaces its settings, so pass --fly-app, --fly-config and --status-url each
 time. Fly apps are found through the orgs connected with cadre fly org add.`,
@@ -186,6 +186,7 @@ time. Fly apps are found through the orgs connected with cadre fly org add.`,
 				examples: []string{
 					"cadre repo set shop-api --fly-app shop-api-prod",
 					"cadre repo set shop-api --fly-app shop-api-prod --fly-config fly.staging.toml",
+					"cadre repo set shop-api --fly-app shop-api --status-url https://app.test/up",
 					"cadre repo set shop-site --platform render",
 				},
 			},

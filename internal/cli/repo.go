@@ -183,9 +183,9 @@ func statusLine(t api.Target) string {
 	state := liveText(t)
 	switch {
 	case t.StatusURL != "" && state == "":
-		return "Status URL " + t.StatusURL + ": not checked yet"
+		return "Status URL " + oneLine(t.StatusURL) + ": not checked yet"
 	case t.StatusURL != "":
-		return "Status URL " + t.StatusURL + ": " + state
+		return "Status URL " + oneLine(t.StatusURL) + ": " + state
 	case state != "":
 		return "Status: " + state
 	default:
