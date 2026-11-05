@@ -238,8 +238,8 @@ untracked files, and main equals origin/main after a git fetch. The repo needs a
 Fly app, set with cadre repo set, and fly must be installed and signed in.
 
 The config file is the one set with --fly-config, else fly.production.toml if
-it's committed, else fly.toml. It refuses unless that file is committed and on
-disk, so an ignored local file never decides what deploys.
+it's committed, else fly.toml. That file must be committed and on disk, or it
+refuses.
 
 Open Before deploying items are listed, and cadre asks before going on. With
 nothing to read, the answer is no. If Cadre can't say what is open, nothing

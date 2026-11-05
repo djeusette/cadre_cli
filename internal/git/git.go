@@ -13,6 +13,9 @@ import (
 // ErrNotACheckout means the working directory is outside a checkout, or the checkout has no origin.
 var ErrNotACheckout = errors.New("not a git checkout")
 
+// ErrMarkedFiles means a tracked file is marked skip-worktree or assume-unchanged. Its text is printed as it is.
+var ErrMarkedFiles = errors.New("Files marked skip-worktree or assume-unchanged can hide changes. Clear the marks, listed by git ls-files -v.")
+
 // Checkout is a checkout's top level.
 type Checkout struct{ Dir string }
 
@@ -44,7 +47,8 @@ func (c Checkout) Branch(ctx context.Context) (string, error) {
 }
 
 // Clean reports whether nothing is staged, modified or untracked, and git status can see every tracked file. Ignored
-// files don't count. When git fails it is never clean.
+// files don't count. When git fails it is never clean. A tree that only has marked files is ErrMarkedFiles, not plain
+// false, as committing or stashing can't help with those.
 func (c Checkout) Clean(ctx context.Context) (bool, error) {
 	out, err := run(ctx, c.Dir, "status", "--porcelain", "--untracked-files=normal")
 	if err != nil || out != "" {
@@ -53,8 +57,8 @@ func (c Checkout) Clean(ctx context.Context) (bool, error) {
 	return c.statusSeesEveryFile(ctx)
 }
 
-// statusSeesEveryFile is false when a tracked file is marked skip-worktree or assume-unchanged, which hide its changes
-// from git status. ls-files -v tags every other tracked file H.
+// statusSeesEveryFile is ErrMarkedFiles when a tracked file is marked skip-worktree or assume-unchanged, which hide its
+// changes from git status. ls-files -v tags every other tracked file H.
 func (c Checkout) statusSeesEveryFile(ctx context.Context) (bool, error) {
 	out, err := run(ctx, c.Dir, "ls-files", "-v")
 	if err != nil {
@@ -62,7 +66,7 @@ func (c Checkout) statusSeesEveryFile(ctx context.Context) (bool, error) {
 	}
 	for line := range strings.Lines(out) {
 		if !strings.HasPrefix(line, "H") {
-			return false, nil
+			return false, ErrMarkedFiles
 		}
 	}
 	return true, nil

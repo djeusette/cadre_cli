@@ -171,13 +171,13 @@ func findApp(_ context.Context, d *deployment) error {
 	return nil
 }
 
-// pickConfig takes the target's config, else fly.production.toml, else fly.toml. Only a committed file counts, so an
-// ignored local file never decides what deploys. The first committed one is the choice, and it must be on disk too:
-// without it, fly may fall back to the app's remote config.
+// pickConfig takes the target's config, cleaned as git lists paths, else fly.production.toml, else fly.toml. Only a
+// committed file counts, so an ignored one is passed over. The first committed one is the choice, and it must be on disk
+// too: without it, fly may fall back to the app's remote config.
 func pickConfig(ctx context.Context, d *deployment) error {
 	candidates, missing := []string{"fly.production.toml", "fly.toml"}, "Neither fly.production.toml nor fly.toml is"
 	if stored, _ := d.settings["config"].(string); stored != "" {
-		candidates, missing = []string{stored}, stored+" isn't"
+		candidates, missing = []string{filepath.Clean(stored)}, stored+" isn't"
 	}
 	for _, file := range candidates {
 		committed, err := d.committed(ctx, file)
@@ -218,14 +218,15 @@ func (d *deployment) noConfig(missing string) error {
 		missing, d.repository.Name, d.app)
 }
 
-// inCheckout reports whether file, relative to the top level, is a file on disk, following links. A folder or a link
-// that leads nowhere is missing. A file that can't be read is an error: the person needs to know why, not that it's gone.
+// inCheckout reports whether file, relative to the top level, is a file on disk, following links. A folder, or a link
+// that leads nowhere or through a file, is missing. A file that can't be read is an error: the person needs to know why,
+// not that it's gone.
 func (d *deployment) inCheckout(file string) (bool, error) {
 	info, err := os.Stat(filepath.Join(d.checkout.Dir, file))
 	switch {
 	case err == nil:
 		return !info.IsDir(), nil
-	case errors.Is(err, fs.ErrNotExist):
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
 		return false, nil
 	default:
 		return false, err
@@ -339,8 +340,8 @@ func (s *session) flyDeploy(ctx context.Context, d *deployment) int {
 	return 0
 }
 
-// runOutlivingSignals runs cmd with cadre staying up until it ends, whatever signal comes, so the status is cmd's. Dying
-// first would leave a deploy running with nobody to report how it went.
+// runOutlivingSignals runs cmd with cadre staying up through SIGINT and SIGTERM until it ends, so the status is cmd's.
+// Dying first would leave a deploy running with nobody to report how it went.
 func runOutlivingSignals(cmd *exec.Cmd) error {
 	sigs := make(chan os.Signal, 2)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)

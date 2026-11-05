@@ -223,7 +223,8 @@ func TestCleanWhenGitFails(t *testing.T) {
 	}
 }
 
-// git status can't see a change to a file marked either way, and fly ships it all the same.
+// git status can't see a change to a file marked either way, and fly ships it all the same. Committing or stashing can't
+// help with that, so it isn't an ordinary dirty tree.
 func TestCleanSeesFilesHiddenFromStatus(t *testing.T) {
 	for _, mark := range []string{"--skip-worktree", "--assume-unchanged"} {
 		t.Run(mark, func(t *testing.T) {
@@ -235,8 +236,8 @@ func TestCleanSeesFilesHiddenFromStatus(t *testing.T) {
 			if out := run(t, dir, "status", "--porcelain"); out != "" {
 				t.Fatalf("git status sees the change: %q", out)
 			}
-			if got, err := c.Clean(context.Background()); err != nil || got {
-				t.Errorf("Clean = (%v, %v), want false", got, err)
+			if got, err := c.Clean(context.Background()); got || !errors.Is(err, git.ErrMarkedFiles) {
+				t.Errorf("Clean = (%v, %v), want (false, ErrMarkedFiles)", got, err)
 			}
 		})
 	}

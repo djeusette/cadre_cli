@@ -192,10 +192,14 @@ func TestDeployConfigIsDocumentedInStep(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := "else fly.production.toml if it's committed, else fly.toml"
+	want := "else fly.production.toml if it's committed, else fly.toml. That file must be committed and on disk"
 	for name, text := range map[string]string{"help": h.out.String(), "README": strings.ReplaceAll(string(readme), "`", "")} {
-		if !strings.Contains(strings.Join(strings.Fields(text), " "), want) {
+		said := strings.Join(strings.Fields(text), " ")
+		if !strings.Contains(said, want) {
 			t.Errorf("%s doesn't say %q", name, want)
+		}
+		if strings.Contains(said, "never decides") { // a committed link can still lead to an ignored file
+			t.Errorf("%s overclaims", name)
 		}
 	}
 }
