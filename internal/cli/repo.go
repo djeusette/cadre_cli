@@ -77,13 +77,25 @@ func setTarget(ctx context.Context, s *session, repo, platform string, settings 
 	case s.asJSON:
 		fmt.Fprint(s.env.Stdout, string(target.Raw))
 	case target.Tracked && target.Account != nil:
-		fmt.Fprintf(s.env.Stdout, "Connected %s to the %s app %s, in the %s org.\n", target.Repo, displayName(target.Platform), fmt.Sprint(target.Settings["app"]), *target.Account)
+		fmt.Fprintf(s.env.Stdout, "Connected %s to the %s app %s, in the %s org.%s\n", target.Repo, displayName(target.Platform), fmt.Sprint(target.Settings["app"]), *target.Account, deploysWith(target))
 	case target.Tracked:
-		fmt.Fprintf(s.env.Stdout, "Connected %s to the %s app %s.\n", target.Repo, displayName(target.Platform), fmt.Sprint(target.Settings["app"]))
+		fmt.Fprintf(s.env.Stdout, "Connected %s to the %s app %s.%s\n", target.Repo, displayName(target.Platform), fmt.Sprint(target.Settings["app"]), deploysWith(target))
 	default:
 		fmt.Fprintf(s.env.Stdout, "cadre can't read %s deploys yet, so %s shows as not tracked.\n", displayName(target.Platform), target.Repo)
 	}
 	return 0
+}
+
+// deploysWith is the sentence saying which config file a Fly target deploys with. It reads the server's answer, so a
+// config that didn't stick shows. Other platforms have no such file.
+func deploysWith(target api.Target) string {
+	if target.Platform != "fly" {
+		return ""
+	}
+	if config, _ := target.Settings["config"].(string); config != "" {
+		return " It deploys with " + config + "."
+	}
+	return " It deploys with fly.production.toml, else fly.toml."
 }
 
 func unsetTarget(ctx context.Context, s *session, repo, platform string) int {

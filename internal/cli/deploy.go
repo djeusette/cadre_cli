@@ -172,9 +172,9 @@ func findApp(_ context.Context, d *deployment) error {
 // pickConfig takes the target's config, else fly.production.toml, else fly.toml, and the file must be at the checkout's
 // top level: without it, fly may fall back to the app's remote config.
 func pickConfig(_ context.Context, d *deployment) error {
-	candidates := []string{"fly.production.toml", "fly.toml"}
+	candidates, missing := []string{"fly.production.toml", "fly.toml"}, "Neither fly.production.toml nor fly.toml is"
 	if stored, _ := d.settings["config"].(string); stored != "" {
-		candidates = []string{stored}
+		candidates, missing = []string{stored}, stored+" isn't"
 	}
 	for _, file := range candidates {
 		found, err := d.inCheckout(file)
@@ -186,17 +186,17 @@ func pickConfig(_ context.Context, d *deployment) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("%s isn't in this checkout. Set the right file with cadre repo set %s --fly-app %s --fly-config <file>.",
-		candidates[len(candidates)-1], d.repository.Name, d.app)
+	return fmt.Errorf("%s in this checkout. Set the right file with cadre repo set %s --fly-app %s --fly-config <file>.",
+		missing, d.repository.Name, d.app)
 }
 
-// inCheckout reports whether file is at the checkout's top level. A file that can't be read is an error, not a missing
-// file: reading it as missing could pick the wrong config.
+// inCheckout reports whether file is at the checkout's top level, where a folder doesn't count, so a stored "." is
+// missing. A file that can't be read is an error, not a missing file: reading it as missing could pick the wrong config.
 func (d *deployment) inCheckout(file string) (bool, error) {
-	_, err := os.Stat(filepath.Join(d.checkout.Dir, file))
+	info, err := os.Stat(filepath.Join(d.checkout.Dir, file))
 	switch {
 	case err == nil:
-		return true, nil
+		return !info.IsDir(), nil
 	case errors.Is(err, fs.ErrNotExist):
 		return false, nil
 	default:
@@ -250,10 +250,11 @@ func oneLine(text string) string {
 }
 
 // answeredYes reads one line. Only y and yes count, and never a line that stdin ended before finishing: with nothing
-// to read, as under Claude Code, the answer is no.
+// to read, as under Claude Code, the answer is no. Nobody pressed return then, so it ends the question's line itself.
 func (s *session) answeredYes() bool {
 	line, err := bufio.NewReader(s.env.stdin()).ReadString('\n')
 	if err != nil {
+		fmt.Fprintln(s.progress())
 		return false
 	}
 	answer := strings.ToLower(strings.TrimSpace(line))

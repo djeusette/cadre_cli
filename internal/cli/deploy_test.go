@@ -30,7 +30,9 @@ const (
 	refusedAnswer   = "Not deployed.\n"
 )
 
-// refusedConfig is the refusal for a config file the checkout doesn't have.
+const refusedNoConfig = "Neither fly.production.toml nor fly.toml is in this checkout. Set the right file with cadre repo set colette-api --fly-app colette-api-prod --fly-config <file>.\n"
+
+// refusedConfig is the refusal for a stored config file the checkout doesn't have.
 func refusedConfig(file string) string {
 	return file + " isn't in this checkout. Set the right file with cadre repo set colette-api --fly-app colette-api-prod --fly-config <file>.\n"
 }
@@ -308,10 +310,13 @@ func (r *deployRig) noConfigFile() {
 	r.git(r.clone, "push", "origin", "main")
 }
 func (r *deployRig) storedConfigMissing() { r.targets = storedTarget }
-func (r *deployRig) flyMissing()          { r.t.Setenv("PATH", r.gitDir) }
-func (r *deployRig) flySignedOut()        { r.t.Setenv("FAKE_FLY_AUTH", "1") }
-func (r *deployRig) cadreFails()          { r.next = func(w http.ResponseWriter) { writeJSON(w, 500, `{}`) } }
-func (r *deployRig) repoUnknown()         { r.repoGone = true }
+func (r *deployRig) storedConfigIsAFolder() {
+	r.targets = `{"platform":"fly","settings":{"app":"colette-api-prod","config":"."},"tracked":true}`
+}
+func (r *deployRig) flyMissing()   { r.t.Setenv("PATH", r.gitDir) }
+func (r *deployRig) flySignedOut() { r.t.Setenv("FAKE_FLY_AUTH", "1") }
+func (r *deployRig) cadreFails()   { r.next = func(w http.ResponseWriter) { writeJSON(w, 500, `{}`) } }
+func (r *deployRig) repoUnknown()  { r.repoGone = true }
 
 func TestDeployRunsFlyWithTheCommitAsTheLabel(t *testing.T) {
 	r := newDeployRig(t)
@@ -491,7 +496,8 @@ func TestDeployRefuses(t *testing.T) {
 		{"no targets", (*deployRig).noTargets, refusedApp},
 		{"a fly target with no app", (*deployRig).noAppSet, refusedApp},
 		{"a stored config the checkout doesn't have", (*deployRig).storedConfigMissing, refusedConfig("fly.custom.toml")},
-		{"neither config file", (*deployRig).noConfigFile, refusedConfig("fly.toml")},
+		{"a stored config that is a folder", (*deployRig).storedConfigIsAFolder, refusedConfig(".")},
+		{"neither config file", (*deployRig).noConfigFile, refusedNoConfig},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newDeployRig(t)
@@ -516,7 +522,7 @@ func TestDeployChecksInOrder(t *testing.T) {
 		{"the fetch, then main", (*deployRig).originGone, (*deployRig).localCommit, "Could not fetch origin: "},
 		{"main, then the Fly app", (*deployRig).localCommit, (*deployRig).onlyRender, refusedMain},
 		{"the Fly app, then the config", (*deployRig).onlyRender, (*deployRig).noConfigFile, refusedApp},
-		{"the config, then fly", (*deployRig).noConfigFile, (*deployRig).flyMissing, refusedConfig("fly.toml")},
+		{"the config, then fly", (*deployRig).noConfigFile, (*deployRig).flyMissing, refusedNoConfig},
 		{"fly, then the open items", (*deployRig).flyMissing, (*deployRig).cadreFails, refusedFly},
 		{"signed in, then the open items", (*deployRig).flySignedOut, (*deployRig).cadreFails, refusedSignIn},
 	} {
@@ -641,18 +647,22 @@ func TestDeployAsksAboutOpenItems(t *testing.T) {
 		})
 	}
 
-	for name, stdin := range map[string]io.Reader{
-		"no":               strings.NewReader("n\n"),
-		"a bare return":    strings.NewReader("\n"),
-		"an empty stdin":   strings.NewReader(""),
-		"a closed stdin":   iotest.ErrReader(os.ErrClosed),
-		"a line cut short": strings.NewReader("y"),
-		"something else":   strings.NewReader("yep\n"),
+	for _, tc := range []struct {
+		name          string
+		stdin         io.Reader
+		afterQuestion string // a read that fails or ends leaves the question's line open, so cadre ends it
+	}{
+		{"no", strings.NewReader("n\n"), ""},
+		{"a bare return", strings.NewReader("\n"), ""},
+		{"something else", strings.NewReader("yep\n"), ""},
+		{"an empty stdin", strings.NewReader(""), "\n"},
+		{"a closed stdin", iotest.ErrReader(os.ErrClosed), "\n"},
+		{"a line cut short", strings.NewReader("y"), "\n"},
 	} {
-		t.Run(name+" doesn't deploy", func(t *testing.T) {
+		t.Run(tc.name+" doesn't deploy", func(t *testing.T) {
 			r := newDeployRig(t)
 			r.items = openItems
-			r.h.deps.Stdin = stdin
+			r.h.deps.Stdin = tc.stdin
 
 			code := r.deploy()
 
@@ -662,7 +672,7 @@ func TestDeployAsksAboutOpenItems(t *testing.T) {
 			if r.h.errb.String() != refusedAnswer {
 				t.Errorf("stderr = %q, want %q", r.h.errb, refusedAnswer)
 			}
-			if want := openItemsText + deployQuestion; r.h.out.String() != want {
+			if want := openItemsText + deployQuestion + tc.afterQuestion; r.h.out.String() != want {
 				t.Errorf("stdout = %q, want %q", r.h.out, want)
 			}
 			r.assertNoDeploy()
@@ -670,15 +680,34 @@ func TestDeployAsksAboutOpenItems(t *testing.T) {
 	}
 }
 
+// With --json the question is on stderr, so the line it leaves open ends there too, and stdout stays empty.
+func TestDeployJSONWithNothingToRead(t *testing.T) {
+	r := newDeployRig(t)
+	r.items = openItems
+
+	code := r.deploy("--json")
+
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if r.h.out.Len() != 0 {
+		t.Errorf("stdout = %q", r.h.out)
+	}
+	if want := openItemsText + deployQuestion + "\n" + refusedAnswer; r.h.errb.String() != want {
+		t.Errorf("stderr = %q, want %q", r.h.errb, want)
+	}
+	r.assertNoDeploy()
+}
+
 // Item text comes from pull request descriptions, so it must not be able to move the cursor or forge the question.
 func TestDeployPrintsAnItemOnOneLine(t *testing.T) {
 	r := newDeployRig(t)
-	r.items = `[{"number":7,"url":"u","text":"Run \u001b[2Kthe\r\nDeploy anyway? [y/N] y\u009b\u202Ereversed\u2028café"}]`
+	r.items = `[{"number":7,"url":"u","text":"Run \u001b[2Kthe\r\nDeploy anyway? [y/N] y\u009b\u202Ereversed\u2028caf\u00e9"}]`
 
 	if code := r.deploy("--yes"); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
 	}
-	want := "Before deploying:\n  #7 Run  [2Kthe  Deploy anyway? [y/N] y  reversed café\nfly output\n" + deployedLine(r.head())
+	want := "Before deploying:\n  #7 Run  [2Kthe  Deploy anyway? [y/N] y  reversed caf\u00e9\nfly output\n" + deployedLine(r.head())
 	if r.h.out.String() != want {
 		t.Errorf("stdout = %q, want %q", r.h.out, want)
 	}
