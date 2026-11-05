@@ -527,6 +527,32 @@ func (c *Client) ShowRepository(ctx context.Context, repo string) (Repository, e
 	return shown, c.decode(status, resp, &shown)
 }
 
+// BeforeDeployingItem is an open item of a pull request a deploy would ship.
+type BeforeDeployingItem struct {
+	Number int    `json:"number"`
+	URL    string `json:"url"`
+	Text   string `json:"text"`
+}
+
+// NextDeploy is what deploying a repo now needs first.
+type NextDeploy struct {
+	Repo            string                `json:"repo"`
+	BeforeDeploying []BeforeDeployingItem `json:"before_deploying"`
+}
+
+// NextDeploy returns ErrRepositoryNotFound or ErrUnauthorized when the server refuses it.
+func (c *Client) NextDeploy(ctx context.Context, repo string) (NextDeploy, error) {
+	var next NextDeploy
+	status, resp, err := c.do(ctx, http.MethodGet, repositoryPath(repo, "/next-deploy"), nil)
+	if err != nil {
+		return next, err
+	}
+	if status != http.StatusOK {
+		return next, repositoryStatusError(status, resp)
+	}
+	return next, c.decode(status, resp, &next)
+}
+
 // SetTarget sets the repo's target on platform, replacing its settings. The server reads the platform first. It
 // returns ErrRepositoryNotFound, ErrPlatformNotConnected, ErrPlatformUnreachable, ErrUnauthorized or a
 // *ValidationError when the server refuses it.

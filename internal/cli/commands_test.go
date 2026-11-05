@@ -1503,6 +1503,22 @@ func TestRepoSetFly(t *testing.T) {
 	}
 }
 
+func TestRepoSetFlyConfig(t *testing.T) {
+	var got linkRequest
+	body := `{"repo":"colette-api","platform":"fly","settings":{"app":"colette-api-prod","config":"fly.staging.toml"},"tracked":true,"account":"colette"}`
+	srv := linkServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	args := []string{"repo", "set", "colette-api", "--fly-app", "colette-api-prod", "--fly-config", "fly.staging.toml"}
+	if code := cli.Run(args, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	settings, _ := got.body["settings"].(map[string]any)
+	if got.method != "PUT" || got.path != "/api/repositories/colette-api/targets/fly" || len(got.body) != 1 || len(settings) != 2 || settings["app"] != "colette-api-prod" || settings["config"] != "fly.staging.toml" {
+		t.Errorf("request = %+v", got)
+	}
+}
+
 func TestRepoSetUntrackedPlatform(t *testing.T) {
 	var got linkRequest
 	srv := linkServer(t, 200, `{"repo":"colette-site","platform":"render","settings":{},"tracked":false}`, &got)
@@ -1685,6 +1701,9 @@ func TestRepoErrors(t *testing.T) {
 		}},
 		{set, 502, `{"error":"platform_unreachable","platform":"fly"}`, func(string) string { return "Cadre couldn't reach Fly. Try again in a minute.\n" }},
 		{set, 422, `{"errors":[{"path":"settings.app","message":"is not an app in the org"}]}`, func(string) string { return "settings.app: is not an app in the org\n" }},
+		{set, 422, `{"errors":[{"path":"settings.config","message":"must be a path inside the repo, such as fly.production.toml"}]}`, func(string) string {
+			return "settings.config: must be a path inside the repo, such as fly.production.toml\n"
+		}},
 		{show, 401, `{"error":"unauthorized"}`, func(server string) string {
 			return "Your key for " + server + " is no longer valid. Run cadre login --url " + server + ".\n"
 		}},
@@ -1716,6 +1735,9 @@ func TestRepoUsage(t *testing.T) {
 		{[]string{"repo", "set", "colette-api", "--fly-app", "colette-api-prod", "--platform", "render"}, usageRepoSet},
 		{[]string{"repo", "set", "colette-api", "--fly-app"}, usageRepoSet},
 		{[]string{"repo", "set", "colette-api", "--platform", "--fly-app"}, usageRepoSet},
+		{[]string{"repo", "set", "colette-api", "--fly-config", "fly.toml"}, usageRepoSet},
+		{[]string{"repo", "set", "colette-api", "--platform", "render", "--fly-config", "fly.toml"}, usageRepoSet},
+		{[]string{"repo", "set", "colette-api", "--fly-app", "colette-api-prod", "--fly-config"}, usageRepoSet},
 		{[]string{"repo", "set", "colette-api", "other", "--fly-app", "colette-api-prod"}, usageRepoSet},
 		{[]string{"repo", "unset", "colette-site"}, usageRepoUnset},
 		{[]string{"repo", "unset", "--platform", "render"}, usageRepoUnset},

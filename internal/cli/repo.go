@@ -11,7 +11,7 @@ import (
 	"github.com/djeusette/cadre_cli/internal/api"
 )
 
-// runRepo dispatches `repo set <repo> (--fly-app <app>|--platform <name>)`, `repo unset <repo> --platform <name>`
+// runRepo dispatches `repo set <repo> (--fly-app <app> [--fly-config <file>]|--platform <name>)`, `repo unset <repo> --platform <name>`
 // and `repo show <repo>`.
 func runRepo(env Env, asJSON bool, args []string) int {
 	if len(args) == 0 {
@@ -24,13 +24,20 @@ func runRepo(env Env, asJSON bool, args []string) int {
 		if !ok {
 			return usageError(env, "repo set")
 		}
+		flyConfig, rest, ok := takeFlag(rest, "--fly-config")
+		if !ok {
+			return usageError(env, "repo set")
+		}
 		platform, rest, ok := takeFlag(rest, "--platform")
-		if !ok || (flyApp == "") == (platform == "") {
+		if !ok || (flyApp == "") == (platform == "") || (flyApp == "" && flyConfig != "") {
 			return usageError(env, "repo set")
 		}
 		settings := map[string]string{}
 		if flyApp != "" {
 			platform, settings["app"] = "fly", flyApp
+			if flyConfig != "" {
+				settings["config"] = flyConfig
+			}
 		}
 		return runCommand(env, asJSON, "repo set", rest, 1, func(ctx context.Context, s *session, a []string) int {
 			if flyApp == "" && strings.EqualFold(platform, "fly") {
