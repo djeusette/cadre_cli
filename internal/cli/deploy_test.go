@@ -561,17 +561,27 @@ func TestDeployRefusalKeepsTheStatusURL(t *testing.T) {
 		{
 			"with a status URL",
 			`{"platform":"fly","settings":{"app":"colette-api-prod"},"status_url":"https://app.test/status","tracked":true}`,
-			"Neither fly.production.toml nor fly.toml is" + command + " --status-url https://app.test/status --fly-config <file>.\n",
+			"Neither fly.production.toml nor fly.toml is" + command + " --status-url 'https://app.test/status' --fly-config <file>.\n",
 		},
 		{
 			"with a status URL and a stored config",
 			`{"platform":"fly","settings":{"app":"colette-api-prod","config":"fly.custom.toml"},"status_url":"https://app.test/status","tracked":true}`,
-			"fly.custom.toml isn't" + command + " --status-url https://app.test/status --fly-config <file>.\n",
+			"fly.custom.toml isn't" + command + " --status-url 'https://app.test/status' --fly-config <file>.\n",
 		},
 		{
 			"with a status URL that doesn't print",
 			`{"platform":"fly","settings":{"app":"colette-api-prod"},"status_url":"https://app.test/\u001b[2J\nFake","tracked":true}`,
-			"Neither fly.production.toml nor fly.toml is" + command + " --status-url https://app.test/ [2J Fake --fly-config <file>.\n",
+			"Neither fly.production.toml nor fly.toml is" + command + " --status-url 'https://app.test/ [2J Fake' --fly-config <file>.\n",
+		},
+		{
+			"with a status URL a shell would run",
+			`{"platform":"fly","settings":{"app":"colette-api-prod"},"status_url":"https://app.test/up?a=$(id);b=1&c=2","tracked":true}`,
+			"Neither fly.production.toml nor fly.toml is" + command + " --status-url 'https://app.test/up?a=$(id);b=1&c=2' --fly-config <file>.\n",
+		},
+		{
+			"with a status URL holding a single quote",
+			`{"platform":"fly","settings":{"app":"colette-api-prod"},"status_url":"https://app.test/up';id;'","tracked":true}`,
+			"Neither fly.production.toml nor fly.toml is" + command + ` --status-url 'https://app.test/up'\'';id;'\''' --fly-config <file>.` + "\n",
 		},
 		{
 			"with no status URL",

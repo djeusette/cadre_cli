@@ -226,7 +226,13 @@ func (d *deployment) statusURLFlag() string {
 	if d.statusURL == "" {
 		return ""
 	}
-	return " --status-url " + oneLine(d.statusURL)
+	return " --status-url " + shellQuoted(oneLine(d.statusURL))
+}
+
+// shellQuoted makes text one shell word that runs nothing, as the person pastes it. Inside single quotes only the quote
+// itself means anything, so each one closes the word, adds an escaped quote and opens it again.
+func shellQuoted(text string) string {
+	return "'" + strings.ReplaceAll(text, "'", `'\''`) + "'"
 }
 
 // inCheckout reports whether file, relative to the top level, is a file on disk, following links. A folder, or a link
