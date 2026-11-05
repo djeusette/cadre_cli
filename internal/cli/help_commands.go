@@ -172,17 +172,19 @@ a milestone number, such as wish-reminders/2.`,
 			{
 				name:    "repo set",
 				summary: "Say where a repo deploys",
-				forms:   []string{"<repo> --fly-app <app>", "<repo> --platform <name>"},
+				forms:   []string{"<repo> --fly-app <app> [--fly-config <file>]", "<repo> --platform <name>"},
 				about: `<repo> is the repo's name in Cadre, such as shop-api. Setting a platform again
-replaces its settings. Fly apps are found through the orgs connected with
-cadre fly org add.`,
+replaces its settings, so pass both --fly-app and --fly-config each time. Fly
+apps are found through the orgs connected with cadre fly org add.`,
 				flags: []helpRow{
 					{"--fly-app <app>", "Connect the repo to this Fly app, which cadre then tracks"},
+					{"--fly-config <file>", "The Fly config file it deploys with, for the whole team"},
 					{"--platform <name>", "Name any other platform, which shows as not tracked"},
 					jsonFlag,
 				},
 				examples: []string{
 					"cadre repo set shop-api --fly-app shop-api-prod",
+					"cadre repo set shop-api --fly-app shop-api-prod --fly-config fly.staging.toml",
 					"cadre repo set shop-site --platform render",
 				},
 			},
@@ -222,6 +224,35 @@ its token.`,
 				about:    "Refused while a repo's target still reads the org.",
 				flags:    []helpRow{jsonFlag},
 				examples: []string{"cadre fly org remove acme"},
+			},
+			{
+				name:    "deploy",
+				summary: "Deploy a repo to its Fly app, from a checkout of it",
+				forms:   []string{"<repo> [--yes]"},
+				about: `<repo> is the repo's name in Cadre, such as shop-api. Run it anywhere in a
+checkout of that repo. cadre runs fly deploy at the checkout's top level, with
+the commit as the image label, so Cadre can tie the deploy to it.
+
+It refuses unless the checkout is on main, has no uncommitted changes or
+untracked files, and main equals origin/main after a git fetch. The repo needs a
+Fly app, set with cadre repo set, and fly must be installed and signed in.
+
+The config file is the one set with --fly-config, else fly.production.toml if
+the checkout has one, else fly.toml. It refuses if that file isn't in the
+checkout.
+
+Open Before deploying items are listed, and cadre asks before going on. With
+nothing to read, the answer is no. If Cadre can't say what is open, nothing
+deploys. Right before fly runs, cadre checks the branch, the commit and the
+working tree again, so a change made in the meantime stops the deploy.`,
+				flags: []helpRow{
+					{"--yes", "Go on despite open Before deploying items"},
+					{"--json", "Print what was deployed as JSON, with fly's output on stderr"},
+				},
+				examples: []string{
+					"cadre deploy shop-api",
+					"cadre deploy shop-api --yes",
+				},
 			},
 		},
 	},

@@ -1494,12 +1494,72 @@ func TestRepoSetFly(t *testing.T) {
 	if code := cli.Run([]string{"repo", "set", "colette-api", "--fly-app", "colette-api-prod"}, h.deps); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, h.errb)
 	}
-	if want := "Connected colette-api to the Fly app colette-api-prod, in the colette org.\n"; h.out.String() != want {
+	if want := "Connected colette-api to the Fly app colette-api-prod, in the colette org. It deploys with fly.production.toml, else fly.toml.\n"; h.out.String() != want {
 		t.Errorf("stdout = %q", h.out)
 	}
 	settings, _ := got.body["settings"].(map[string]any)
 	if got.method != "PUT" || got.path != "/api/repositories/colette-api/targets/fly" || got.auth != "Bearer cadre_abc" || len(got.body) != 1 || len(settings) != 1 || settings["app"] != "colette-api-prod" {
 		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestRepoSetFlyConfig(t *testing.T) {
+	var got linkRequest
+	body := `{"repo":"colette-api","platform":"fly","settings":{"app":"colette-api-prod","config":"fly.staging.toml"},"tracked":true,"account":"colette"}`
+	srv := linkServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	args := []string{"repo", "set", "colette-api", "--fly-app", "colette-api-prod", "--fly-config", "fly.staging.toml"}
+	if code := cli.Run(args, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Connected colette-api to the Fly app colette-api-prod, in the colette org. It deploys with fly.staging.toml.\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+	settings, _ := got.body["settings"].(map[string]any)
+	if got.method != "PUT" || got.path != "/api/repositories/colette-api/targets/fly" || len(got.body) != 1 || len(settings) != 2 || settings["app"] != "colette-api-prod" || settings["config"] != "fly.staging.toml" {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+// The line reads the server's answer, not the flags: a config that didn't stick must not read as set.
+func TestRepoSetSaysWhatItDeploysWith(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		body string
+		want string
+	}{
+		{
+			"a stored config, with no account",
+			[]string{"--fly-app", "colette-api-prod", "--fly-config", "fly.staging.toml"},
+			`{"repo":"colette-api","platform":"fly","settings":{"app":"colette-api-prod","config":"fly.staging.toml"},"tracked":true,"account":null}`,
+			"Connected colette-api to the Fly app colette-api-prod. It deploys with fly.staging.toml.\n",
+		},
+		{
+			"a config the answer doesn't hold",
+			[]string{"--fly-app", "colette-api-prod", "--fly-config", "fly.staging.toml"},
+			`{"repo":"colette-api","platform":"fly","settings":{"app":"colette-api-prod"},"tracked":true,"account":"colette"}`,
+			"Connected colette-api to the Fly app colette-api-prod, in the colette org. It deploys with fly.production.toml, else fly.toml.\n",
+		},
+		{
+			"another tracked platform",
+			[]string{"--platform", "heroku"},
+			`{"repo":"colette-api","platform":"heroku","settings":{"app":"colette-api-prod"},"tracked":true,"account":null}`,
+			"Connected colette-api to the Heroku app colette-api-prod.\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got linkRequest
+			h := newHarness(t, linkServer(t, 200, tc.body, &got), &config.Config{APIKey: "cadre_abc"})
+
+			if code := cli.Run(append([]string{"repo", "set", "colette-api"}, tc.args...), h.deps); code != 0 {
+				t.Fatalf("code = %d, stderr %q", code, h.errb)
+			}
+			if h.out.String() != tc.want {
+				t.Errorf("stdout = %q, want %q", h.out, tc.want)
+			}
+		})
 	}
 }
 
@@ -1685,6 +1745,9 @@ func TestRepoErrors(t *testing.T) {
 		}},
 		{set, 502, `{"error":"platform_unreachable","platform":"fly"}`, func(string) string { return "Cadre couldn't reach Fly. Try again in a minute.\n" }},
 		{set, 422, `{"errors":[{"path":"settings.app","message":"is not an app in the org"}]}`, func(string) string { return "settings.app: is not an app in the org\n" }},
+		{set, 422, `{"errors":[{"path":"settings.config","message":"must be a path inside the repo, such as fly.production.toml"}]}`, func(string) string {
+			return "settings.config: must be a path inside the repo, such as fly.production.toml\n"
+		}},
 		{show, 401, `{"error":"unauthorized"}`, func(server string) string {
 			return "Your key for " + server + " is no longer valid. Run cadre login --url " + server + ".\n"
 		}},
@@ -1716,6 +1779,9 @@ func TestRepoUsage(t *testing.T) {
 		{[]string{"repo", "set", "colette-api", "--fly-app", "colette-api-prod", "--platform", "render"}, usageRepoSet},
 		{[]string{"repo", "set", "colette-api", "--fly-app"}, usageRepoSet},
 		{[]string{"repo", "set", "colette-api", "--platform", "--fly-app"}, usageRepoSet},
+		{[]string{"repo", "set", "colette-api", "--fly-config", "fly.toml"}, usageRepoSet},
+		{[]string{"repo", "set", "colette-api", "--platform", "render", "--fly-config", "fly.toml"}, usageRepoSet},
+		{[]string{"repo", "set", "colette-api", "--fly-app", "colette-api-prod", "--fly-config"}, usageRepoSet},
 		{[]string{"repo", "set", "colette-api", "other", "--fly-app", "colette-api-prod"}, usageRepoSet},
 		{[]string{"repo", "unset", "colette-site"}, usageRepoUnset},
 		{[]string{"repo", "unset", "--platform", "render"}, usageRepoUnset},
@@ -1761,7 +1827,7 @@ func TestRepoSetWithoutAccountKeepsTheShortLine(t *testing.T) {
 	if code := cli.Run([]string{"repo", "set", "colette-api", "--fly-app", "colette-api-prod"}, h.deps); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, h.errb)
 	}
-	if want := "Connected colette-api to the Fly app colette-api-prod.\n"; h.out.String() != want {
+	if want := "Connected colette-api to the Fly app colette-api-prod. It deploys with fly.production.toml, else fly.toml.\n"; h.out.String() != want {
 		t.Errorf("stdout = %q", h.out)
 	}
 }

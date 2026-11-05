@@ -773,3 +773,62 @@ func TestTargetCarriesItsAccount(t *testing.T) {
 		t.Errorf("targets = %+v", got.Targets)
 	}
 }
+
+func TestNextDeploy(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.EscapedPath() != "/api/repositories/colette-api/next-deploy" || r.Header.Get("Authorization") != "Bearer cadre_secret" {
+			t.Errorf("bad request: %s %s %v", r.Method, r.URL.EscapedPath(), r.Header)
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, `{"repo":"colette-api","before_deploying":[{"number":418,"url":"https://github.com/colette-club/colette-api/pull/418","text":"Set SENDGRID_KEY on colette-api"}]}`)
+	})
+
+	got, err := c.NextDeploy(context.Background(), "colette-api")
+
+	want := api.BeforeDeployingItem{Number: 418, URL: "https://github.com/colette-club/colette-api/pull/418", Text: "Set SENDGRID_KEY on colette-api"}
+	if err != nil || got.Repo != "colette-api" || len(got.BeforeDeploying) != 1 || got.BeforeDeploying[0] != want {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestNextDeployWithNothingOpen(t *testing.T) {
+	c := newClient(t, reply(200, `{"repo":"colette-api","before_deploying":[]}`))
+
+	got, err := c.NextDeploy(context.Background(), "colette-api")
+
+	if err != nil || got.BeforeDeploying == nil || len(got.BeforeDeploying) != 0 {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+// A 200 with no list says nothing about what is open, so it must not read as nothing being open.
+func TestNextDeployWithoutAList(t *testing.T) {
+	for _, body := range []string{
+		`{}`,
+		`{"repo":"colette-api"}`,
+		`{"repo":"colette-api","before_deploying":null}`,
+		`{"repo":"colette-api","open_items":[]}`,
+	} {
+		c := newClient(t, reply(200, body))
+		if _, err := c.NextDeploy(context.Background(), "colette-api"); err == nil || !strings.Contains(err.Error(), "unexpected response") {
+			t.Errorf("%s: err = %v", body, err)
+		}
+	}
+}
+
+func TestNextDeployErrors(t *testing.T) {
+	cases := []struct {
+		status int
+		body   string
+		want   error
+	}{
+		{404, `{"error":"repository_not_found"}`, api.ErrRepositoryNotFound},
+		{401, `{"error":"unauthorized"}`, api.ErrUnauthorized},
+	}
+	for _, tc := range cases {
+		c := newClient(t, reply(tc.status, tc.body))
+		if _, err := c.NextDeploy(context.Background(), "colette-api"); !errors.Is(err, tc.want) {
+			t.Errorf("%d: err = %v", tc.status, err)
+		}
+	}
+}

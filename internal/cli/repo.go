@@ -11,7 +11,7 @@ import (
 	"github.com/djeusette/cadre_cli/internal/api"
 )
 
-// runRepo dispatches `repo set <repo> (--fly-app <app>|--platform <name>)`, `repo unset <repo> --platform <name>`
+// runRepo dispatches `repo set <repo> (--fly-app <app> [--fly-config <file>]|--platform <name>)`, `repo unset <repo> --platform <name>`
 // and `repo show <repo>`.
 func runRepo(env Env, asJSON bool, args []string) int {
 	if len(args) == 0 {
@@ -24,13 +24,20 @@ func runRepo(env Env, asJSON bool, args []string) int {
 		if !ok {
 			return usageError(env, "repo set")
 		}
+		flyConfig, rest, ok := takeFlag(rest, "--fly-config")
+		if !ok {
+			return usageError(env, "repo set")
+		}
 		platform, rest, ok := takeFlag(rest, "--platform")
-		if !ok || (flyApp == "") == (platform == "") {
+		if !ok || (flyApp == "") == (platform == "") || (flyApp == "" && flyConfig != "") {
 			return usageError(env, "repo set")
 		}
 		settings := map[string]string{}
 		if flyApp != "" {
 			platform, settings["app"] = "fly", flyApp
+			if flyConfig != "" {
+				settings["config"] = flyConfig
+			}
 		}
 		return runCommand(env, asJSON, "repo set", rest, 1, func(ctx context.Context, s *session, a []string) int {
 			if flyApp == "" && strings.EqualFold(platform, "fly") {
@@ -70,13 +77,25 @@ func setTarget(ctx context.Context, s *session, repo, platform string, settings 
 	case s.asJSON:
 		fmt.Fprint(s.env.Stdout, string(target.Raw))
 	case target.Tracked && target.Account != nil:
-		fmt.Fprintf(s.env.Stdout, "Connected %s to the %s app %s, in the %s org.\n", target.Repo, displayName(target.Platform), fmt.Sprint(target.Settings["app"]), *target.Account)
+		fmt.Fprintf(s.env.Stdout, "Connected %s to the %s app %s, in the %s org.%s\n", target.Repo, displayName(target.Platform), fmt.Sprint(target.Settings["app"]), *target.Account, deploysWith(target))
 	case target.Tracked:
-		fmt.Fprintf(s.env.Stdout, "Connected %s to the %s app %s.\n", target.Repo, displayName(target.Platform), fmt.Sprint(target.Settings["app"]))
+		fmt.Fprintf(s.env.Stdout, "Connected %s to the %s app %s.%s\n", target.Repo, displayName(target.Platform), fmt.Sprint(target.Settings["app"]), deploysWith(target))
 	default:
 		fmt.Fprintf(s.env.Stdout, "cadre can't read %s deploys yet, so %s shows as not tracked.\n", displayName(target.Platform), target.Repo)
 	}
 	return 0
+}
+
+// deploysWith is the sentence saying which config file a Fly target deploys with. It reads the server's answer, so a
+// config that didn't stick shows. Other platforms have no such file.
+func deploysWith(target api.Target) string {
+	if target.Platform != "fly" {
+		return ""
+	}
+	if config, _ := target.Settings["config"].(string); config != "" {
+		return " It deploys with " + config + "."
+	}
+	return " It deploys with fly.production.toml, else fly.toml."
 }
 
 func unsetTarget(ctx context.Context, s *session, repo, platform string) int {
