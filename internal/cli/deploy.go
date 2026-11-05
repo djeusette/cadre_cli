@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/djeusette/cadre_cli/internal/api"
 	"github.com/djeusette/cadre_cli/internal/git"
@@ -82,6 +83,9 @@ func deploy(ctx context.Context, s *session, repo string, yes bool) int {
 	if !s.settleOpenItems(next.BeforeDeploying, yes) {
 		fmt.Fprintln(s.env.Stderr, msgNotDeployed)
 		return 1
+	}
+	if err := checkUnchanged(ctx, d); err != nil {
+		return fail(s.env, err)
 	}
 	return s.flyDeploy(ctx, d)
 }
@@ -165,23 +169,39 @@ func findApp(_ context.Context, d *deployment) error {
 	return nil
 }
 
-// pickConfig takes the target's config, else fly.production.toml if the checkout has one, else fly.toml. A file that
-// can't be read stops the deploy, because fly.toml may be the wrong config for it.
+// pickConfig takes the target's config, else fly.production.toml, else fly.toml, and the file must be at the checkout's
+// top level: without it, fly may fall back to the app's remote config.
 func pickConfig(_ context.Context, d *deployment) error {
-	if config, _ := d.settings["config"].(string); config != "" {
-		d.config = config
-		return nil
+	candidates := []string{"fly.production.toml", "fly.toml"}
+	if stored, _ := d.settings["config"].(string); stored != "" {
+		candidates = []string{stored}
 	}
-	_, err := os.Stat(filepath.Join(d.checkout.Dir, "fly.production.toml"))
+	for _, file := range candidates {
+		found, err := d.inCheckout(file)
+		if err != nil {
+			return err
+		}
+		if found {
+			d.config = file
+			return nil
+		}
+	}
+	return fmt.Errorf("%s isn't in this checkout. Set the right file with cadre repo set %s --fly-app %s --fly-config <file>.",
+		candidates[len(candidates)-1], d.repository.Name, d.app)
+}
+
+// inCheckout reports whether file is at the checkout's top level. A file that can't be read is an error, not a missing
+// file: reading it as missing could pick the wrong config.
+func (d *deployment) inCheckout(file string) (bool, error) {
+	_, err := os.Stat(filepath.Join(d.checkout.Dir, file))
 	switch {
 	case err == nil:
-		d.config = "fly.production.toml"
+		return true, nil
 	case errors.Is(err, fs.ErrNotExist):
-		d.config = "fly.toml"
+		return false, nil
 	default:
-		return err
+		return false, err
 	}
-	return nil
 }
 
 // findFly finds fly, or flyctl as some installs name it, and asks it who is signed in.
@@ -209,7 +229,7 @@ func (s *session) settleOpenItems(items []api.BeforeDeployingItem, yes bool) boo
 	out := s.progress()
 	fmt.Fprintln(out, "Before deploying:")
 	for _, item := range items {
-		fmt.Fprintf(out, "  #%d %s\n", item.Number, item.Text)
+		fmt.Fprintf(out, "  #%d %s\n", item.Number, oneLine(item.Text))
 	}
 	if yes {
 		return true
@@ -218,8 +238,19 @@ func (s *session) settleOpenItems(items []api.BeforeDeployingItem, yes bool) boo
 	return s.answeredYes()
 }
 
-// answeredYes reads one line. Only y and yes count, and never a line that stdin ended before finishing: with no
-// terminal, as under Claude Code, the answer is no.
+// oneLine replaces control characters with spaces. Item text comes from pull request descriptions, so it is untrusted:
+// an escape or a newline in it could forge the question.
+func oneLine(text string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, text)
+}
+
+// answeredYes reads one line. Only y and yes count, and never a line that stdin ended before finishing: with nothing
+// to read, as under Claude Code, the answer is no.
 func (s *session) answeredYes() bool {
 	line, err := bufio.NewReader(s.env.stdin()).ReadString('\n')
 	if err != nil {
@@ -227,6 +258,26 @@ func (s *session) answeredYes() bool {
 	}
 	answer := strings.ToLower(strings.TrimSpace(line))
 	return answer == "y" || answer == "yes"
+}
+
+// checkUnchanged repeats the local checks right before fly. The question can wait for minutes, and fly ships the
+// working tree, so a commit, a switch or an edit since the checks must not go out under d.commit. It makes no network
+// call.
+func checkUnchanged(ctx context.Context, d *deployment) error {
+	if err := checkBranch(ctx, d); err != nil {
+		return err
+	}
+	if err := checkClean(ctx, d); err != nil {
+		return err
+	}
+	head, err := d.checkout.Head(ctx)
+	if err != nil {
+		return err
+	}
+	if head != d.commit {
+		return errMainDiffers
+	}
+	return nil
 }
 
 // flyDeploy runs fly at the checkout's top level, with the commit as the image label.

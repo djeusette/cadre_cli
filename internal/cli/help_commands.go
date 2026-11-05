@@ -238,11 +238,13 @@ untracked files, and main equals origin/main after a git fetch. The repo needs a
 Fly app, set with cadre repo set, and fly must be installed and signed in.
 
 The config file is the one set with --fly-config, else fly.production.toml if
-the checkout has one, else fly.toml.
+the checkout has one, else fly.toml. It refuses if that file isn't in the
+checkout.
 
-Open Before deploying items are listed, and cadre asks before going on. With no
-terminal to answer on, the answer is no. If Cadre can't say what is open,
-nothing deploys.`,
+Open Before deploying items are listed, and cadre asks before going on. With
+nothing to read, the answer is no. If Cadre can't say what is open, nothing
+deploys. Right before fly runs, cadre checks the branch, the commit and the
+working tree again, so a change made in the meantime stops the deploy.`,
 				flags: []helpRow{
 					{"--yes", "Go on despite open Before deploying items"},
 					{"--json", "Print what was deployed as JSON, with fly's output on stderr"},

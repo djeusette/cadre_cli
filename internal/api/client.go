@@ -540,7 +540,8 @@ type NextDeploy struct {
 	BeforeDeploying []BeforeDeployingItem `json:"before_deploying"`
 }
 
-// NextDeploy returns ErrRepositoryNotFound or ErrUnauthorized when the server refuses it.
+// NextDeploy returns ErrRepositoryNotFound or ErrUnauthorized when the server refuses it. An answer with no
+// before_deploying list is an error: only an empty list means that nothing is open.
 func (c *Client) NextDeploy(ctx context.Context, repo string) (NextDeploy, error) {
 	var next NextDeploy
 	status, resp, err := c.do(ctx, http.MethodGet, repositoryPath(repo, "/next-deploy"), nil)
@@ -550,7 +551,13 @@ func (c *Client) NextDeploy(ctx context.Context, repo string) (NextDeploy, error
 	if status != http.StatusOK {
 		return next, repositoryStatusError(status, resp)
 	}
-	return next, c.decode(status, resp, &next)
+	if err := c.decode(status, resp, &next); err != nil {
+		return next, err
+	}
+	if next.BeforeDeploying == nil {
+		return next, c.unexpected(status, errors.New("no before_deploying list"))
+	}
+	return next, nil
 }
 
 // SetTarget sets the repo's target on platform, replacing its settings. The server reads the platform first. It

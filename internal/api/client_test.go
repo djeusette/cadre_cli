@@ -791,6 +791,31 @@ func TestNextDeploy(t *testing.T) {
 	}
 }
 
+func TestNextDeployWithNothingOpen(t *testing.T) {
+	c := newClient(t, reply(200, `{"repo":"colette-api","before_deploying":[]}`))
+
+	got, err := c.NextDeploy(context.Background(), "colette-api")
+
+	if err != nil || got.BeforeDeploying == nil || len(got.BeforeDeploying) != 0 {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+// A 200 with no list says nothing about what is open, so it must not read as nothing being open.
+func TestNextDeployWithoutAList(t *testing.T) {
+	for _, body := range []string{
+		`{}`,
+		`{"repo":"colette-api"}`,
+		`{"repo":"colette-api","before_deploying":null}`,
+		`{"repo":"colette-api","open_items":[]}`,
+	} {
+		c := newClient(t, reply(200, body))
+		if _, err := c.NextDeploy(context.Background(), "colette-api"); err == nil || !strings.Contains(err.Error(), "unexpected response") {
+			t.Errorf("%s: err = %v", body, err)
+		}
+	}
+}
+
 func TestNextDeployErrors(t *testing.T) {
 	cases := []struct {
 		status int

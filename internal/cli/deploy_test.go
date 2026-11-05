@@ -30,8 +30,14 @@ const (
 	refusedAnswer   = "Not deployed.\n"
 )
 
+// refusedConfig is the refusal for a config file the checkout doesn't have.
+func refusedConfig(file string) string {
+	return file + " isn't in this checkout. Set the right file with cadre repo set colette-api --fly-app colette-api-prod --fly-config <file>.\n"
+}
+
 const (
 	flyTarget    = `{"platform":"fly","settings":{"app":"colette-api-prod"},"tracked":true}`
+	storedTarget = `{"platform":"fly","settings":{"app":"colette-api-prod","config":"fly.custom.toml"},"tracked":true}`
 	renderTarget = `{"platform":"render","settings":{},"tracked":false}`
 	openItems    = `[
 		{"number":418,"url":"https://github.com/colette-club/colette-api/pull/418","text":"Set SENDGRID_KEY on colette-api"},
@@ -41,15 +47,19 @@ const (
 	deployQuestion = "Deploy anyway? [y/N] "
 )
 
-// fakeFly stands in for fly. Only `auth whoami` answers without logging, so any other call shows in $FAKE_FLY_LOG.
+// fakeFly stands in for fly. Only `auth whoami` answers without logging, so any other call shows in $FAKE_FLY_LOG, with
+// the line it read from stdin.
 const fakeFly = `#!/bin/sh
 if [ "$*" = "auth whoami" ]; then
   echo "ada@colette.club"
   exit "$FAKE_FLY_AUTH"
 fi
+read -r line
 echo "$PWD" > "$FAKE_FLY_LOG"
 echo "$*" >> "$FAKE_FLY_LOG"
+echo "$line" >> "$FAKE_FLY_LOG"
 echo "fly output"
+echo "fly warning" >&2
 exit "$FAKE_FLY_EXIT"
 `
 
@@ -146,7 +156,8 @@ func (r *deployRig) makeClone() {
 	r.git(r.origin, "init", "--bare", "-b", "main")
 	r.git(r.root, "clone", r.origin, r.clone)
 	r.git(r.clone, "checkout", "-b", "main")
-	r.pushed("README.md")
+	r.commit(r.clone, "README.md")
+	r.pushed("fly.toml")
 }
 
 func (r *deployRig) startServer() {
@@ -209,15 +220,15 @@ func (r *deployRig) deploy(flags ...string) int {
 	return cli.Run(append([]string{"deploy", "colette-api"}, flags...), r.h.deps)
 }
 
-// flyRan is where fly deploy ran and with what, and fails the test when it didn't.
-func (r *deployRig) flyRan() (dir, args string) {
+// flyRan is where fly deploy ran, its arguments and the line it read from stdin, and fails the test when it didn't run.
+func (r *deployRig) flyRan() (dir, args, stdin string) {
 	r.t.Helper()
 	raw, err := os.ReadFile(r.log)
 	if err != nil {
 		r.t.Fatalf("fly deploy never ran: %v", err)
 	}
-	dir, args, _ = strings.Cut(strings.TrimSpace(string(raw)), "\n")
-	return dir, args
+	lines := strings.SplitN(string(raw), "\n", 3)
+	return lines[0], lines[1], strings.TrimSpace(lines[2])
 }
 
 func (r *deployRig) assertNoDeploy() {
@@ -241,6 +252,20 @@ func (r *deployRig) assertRefused(code int, want string) {
 		r.t.Errorf("stdout = %q", r.h.out)
 	}
 	r.assertNoDeploy()
+}
+
+// gitFailing is a PATH whose git fails on one call and hands every other to the real git.
+func (r *deployRig) gitFailing(call string) string {
+	r.t.Helper()
+	wrapper := filepath.Join(r.root, "git-wrapper")
+	if err := os.Mkdir(wrapper, 0o755); err != nil {
+		r.t.Fatal(err)
+	}
+	script := fmt.Sprintf("#!/bin/sh\nif [ \"$*\" = '%s' ]; then\n  echo 'git broke' >&2\n  exit 1\nfi\nexec '%s' \"$@\"\n", call, r.realGit)
+	if err := os.WriteFile(filepath.Join(wrapper, "git"), []byte(script), 0o755); err != nil {
+		r.t.Fatal(err)
+	}
+	return wrapper + string(os.PathListSeparator) + r.flyDir
 }
 
 func deployedLine(sha string) string {
@@ -274,13 +299,19 @@ func (r *deployRig) originGone() {
 		r.t.Fatal(err)
 	}
 }
-func (r *deployRig) onlyRender()   { r.targets = renderTarget }
-func (r *deployRig) noTargets()    { r.targets = "" }
-func (r *deployRig) noAppSet()     { r.targets = `{"platform":"fly","settings":{},"tracked":true}` }
-func (r *deployRig) flyMissing()   { r.t.Setenv("PATH", r.gitDir) }
-func (r *deployRig) flySignedOut() { r.t.Setenv("FAKE_FLY_AUTH", "1") }
-func (r *deployRig) cadreFails()   { r.next = func(w http.ResponseWriter) { writeJSON(w, 500, `{}`) } }
-func (r *deployRig) repoUnknown()  { r.repoGone = true }
+func (r *deployRig) onlyRender() { r.targets = renderTarget }
+func (r *deployRig) noTargets()  { r.targets = "" }
+func (r *deployRig) noAppSet()   { r.targets = `{"platform":"fly","settings":{},"tracked":true}` }
+func (r *deployRig) noConfigFile() {
+	r.git(r.clone, "rm", "-q", "fly.toml")
+	r.git(r.clone, "commit", "-m", "no config")
+	r.git(r.clone, "push", "origin", "main")
+}
+func (r *deployRig) storedConfigMissing() { r.targets = storedTarget }
+func (r *deployRig) flyMissing()          { r.t.Setenv("PATH", r.gitDir) }
+func (r *deployRig) flySignedOut()        { r.t.Setenv("FAKE_FLY_AUTH", "1") }
+func (r *deployRig) cadreFails()          { r.next = func(w http.ResponseWriter) { writeJSON(w, 500, `{}`) } }
+func (r *deployRig) repoUnknown()         { r.repoGone = true }
 
 func TestDeployRunsFlyWithTheCommitAsTheLabel(t *testing.T) {
 	r := newDeployRig(t)
@@ -291,28 +322,42 @@ func TestDeployRunsFlyWithTheCommitAsTheLabel(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
 	}
-	if _, args := r.flyRan(); args != "deploy --app colette-api-prod --config fly.toml --image-label "+sha {
+	if _, args, _ := r.flyRan(); args != "deploy --app colette-api-prod --config fly.toml --image-label "+sha {
 		t.Errorf("fly ran with %q", args)
 	}
 	if want := "fly output\n" + deployedLine(sha); r.h.out.String() != want {
 		t.Errorf("stdout = %q, want %q", r.h.out, want)
 	}
-	if r.h.errb.Len() != 0 {
-		t.Errorf("stderr = %q", r.h.errb)
+	if r.h.errb.String() != "fly warning\n" {
+		t.Errorf("stderr = %q, want only fly's", r.h.errb)
+	}
+}
+
+// fly can read what it asks for, and what it says on stderr reaches the person.
+func TestDeployGivesFlyItsStdinAndStderr(t *testing.T) {
+	r := newDeployRig(t)
+	r.h.deps.Stdin = strings.NewReader("a line for fly\n")
+
+	if code := r.deploy(); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+	}
+	if _, _, stdin := r.flyRan(); stdin != "a line for fly" {
+		t.Errorf("fly read %q from stdin", stdin)
+	}
+	if !strings.Contains(r.h.errb.String(), "fly warning") {
+		t.Errorf("stderr = %q, want fly's", r.h.errb)
 	}
 }
 
 func TestDeployPicksTheConfig(t *testing.T) {
-	stored := `{"platform":"fly","settings":{"app":"colette-api-prod","config":"fly.custom.toml"},"tracked":true}`
 	for _, tc := range []struct {
 		name, target string
 		committed    []string
 		want         string
 	}{
-		{"a stored config wins over a committed file", stored, []string{"fly.production.toml", "fly.toml"}, "fly.custom.toml"},
-		{"fly.production.toml wins over fly.toml", flyTarget, []string{"fly.production.toml", "fly.toml"}, "fly.production.toml"},
-		{"fly.toml alone", flyTarget, []string{"fly.toml"}, "fly.toml"},
-		{"neither gives fly.toml", flyTarget, nil, "fly.toml"},
+		{"a stored config wins over a committed file", storedTarget, []string{"fly.custom.toml", "fly.production.toml"}, "fly.custom.toml"},
+		{"fly.production.toml wins over fly.toml", flyTarget, []string{"fly.production.toml"}, "fly.production.toml"},
+		{"fly.toml alone", flyTarget, nil, "fly.toml"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newDeployRig(t)
@@ -324,7 +369,7 @@ func TestDeployPicksTheConfig(t *testing.T) {
 			if code := r.deploy(); code != 0 {
 				t.Fatalf("code = %d, stderr %q", code, r.h.errb)
 			}
-			if _, args := r.flyRan(); !strings.Contains(args, " --config "+tc.want+" ") {
+			if _, args, _ := r.flyRan(); !strings.Contains(args, " --config "+tc.want+" ") {
 				t.Errorf("fly ran with %q, want --config %s", args, tc.want)
 			}
 		})
@@ -361,7 +406,7 @@ func TestDeployRunsAtTheTopLevel(t *testing.T) {
 	if code := r.deploy(); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
 	}
-	dir, args := r.flyRan()
+	dir, args, _ := r.flyRan()
 	if dir != r.clone {
 		t.Errorf("fly ran in %q, want %q", dir, r.clone)
 	}
@@ -445,6 +490,8 @@ func TestDeployRefuses(t *testing.T) {
 		{"targets with only render", (*deployRig).onlyRender, refusedApp},
 		{"no targets", (*deployRig).noTargets, refusedApp},
 		{"a fly target with no app", (*deployRig).noAppSet, refusedApp},
+		{"a stored config the checkout doesn't have", (*deployRig).storedConfigMissing, refusedConfig("fly.custom.toml")},
+		{"neither config file", (*deployRig).noConfigFile, refusedConfig("fly.toml")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newDeployRig(t)
@@ -468,7 +515,8 @@ func TestDeployChecksInOrder(t *testing.T) {
 		{"clean, then the fetch", (*deployRig).untrackedFile, (*deployRig).originGone, refusedClean},
 		{"the fetch, then main", (*deployRig).originGone, (*deployRig).localCommit, "Could not fetch origin: "},
 		{"main, then the Fly app", (*deployRig).localCommit, (*deployRig).onlyRender, refusedMain},
-		{"the Fly app, then fly", (*deployRig).onlyRender, (*deployRig).flyMissing, refusedApp},
+		{"the Fly app, then the config", (*deployRig).onlyRender, (*deployRig).noConfigFile, refusedApp},
+		{"the config, then fly", (*deployRig).noConfigFile, (*deployRig).flyMissing, refusedConfig("fly.toml")},
 		{"fly, then the open items", (*deployRig).flyMissing, (*deployRig).cadreFails, refusedFly},
 		{"signed in, then the open items", (*deployRig).flySignedOut, (*deployRig).cadreFails, refusedSignIn},
 	} {
@@ -540,15 +588,7 @@ func TestDeployWhenGitFails(t *testing.T) {
 	} {
 		t.Run(tc.failing, func(t *testing.T) {
 			r := newDeployRig(t)
-			wrapper := filepath.Join(r.root, "git-wrapper")
-			if err := os.Mkdir(wrapper, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			script := fmt.Sprintf("#!/bin/sh\nif [ \"$*\" = '%s' ]; then\n  echo 'git broke' >&2\n  exit 1\nfi\nexec '%s' \"$@\"\n", tc.failing, r.realGit)
-			if err := os.WriteFile(filepath.Join(wrapper, "git"), []byte(script), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("PATH", wrapper+string(os.PathListSeparator)+r.flyDir)
+			t.Setenv("PATH", r.gitFailing(tc.failing))
 
 			r.assertRefused(r.deploy(), tc.want)
 		})
@@ -630,6 +670,118 @@ func TestDeployAsksAboutOpenItems(t *testing.T) {
 	}
 }
 
+// Item text comes from pull request descriptions, so it must not be able to move the cursor or forge the question.
+func TestDeployPrintsAnItemOnOneLine(t *testing.T) {
+	r := newDeployRig(t)
+	r.items = `[{"number":7,"url":"u","text":"Run \u001b[2Kthe\r\nDeploy anyway? [y/N] y\u009b"}]`
+
+	if code := r.deploy("--yes"); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+	}
+	want := "Before deploying:\n  #7 Run  [2Kthe  Deploy anyway? [y/N] y \nfly output\n" + deployedLine(r.head())
+	if r.h.out.String() != want {
+		t.Errorf("stdout = %q, want %q", r.h.out, want)
+	}
+}
+
+// changingStdin runs change on its first read, as someone working during the question would, then answers.
+type changingStdin struct {
+	change func()
+	answer io.Reader
+}
+
+func (c *changingStdin) Read(p []byte) (int, error) {
+	if c.change != nil {
+		c.change()
+		c.change = nil
+	}
+	return c.answer.Read(p)
+}
+
+// The checks ran before the question, which can wait for minutes, and fly ships the working tree.
+func TestDeployRechecksAfterTheQuestion(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*deployRig)
+		want   string
+	}{
+		{"a commit", (*deployRig).localCommit, refusedMain},
+		{"an edit to a tracked file", (*deployRig).unstagedChange, refusedClean},
+		{"a staged change", (*deployRig).stagedChange, refusedClean},
+		{"an untracked file", (*deployRig).untrackedFile, refusedClean},
+		{"a switch to another branch", (*deployRig).anotherBranch, refusedBranch},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newDeployRig(t)
+			r.items = openItems
+			r.h.deps.Stdin = &changingStdin{change: func() { tc.change(r) }, answer: strings.NewReader("y\n")}
+
+			code := r.deploy()
+
+			if code != 1 {
+				t.Errorf("code = %d, want 1", code)
+			}
+			if r.h.errb.String() != tc.want {
+				t.Errorf("stderr = %q, want %q", r.h.errb, tc.want)
+			}
+			if want := openItemsText + deployQuestion; r.h.out.String() != want {
+				t.Errorf("stdout = %q, want %q", r.h.out, want)
+			}
+			r.assertNoDeploy()
+		})
+	}
+}
+
+// With no question there is still a gap, while Cadre answers: the server makes the commit here.
+func TestDeployRechecksWithoutAQuestion(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		items string
+		flags []string
+	}{
+		{"nothing open", "[]", nil},
+		{"--yes", openItems, []string{"--yes"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newDeployRig(t)
+			r.next = func(w http.ResponseWriter) {
+				r.localCommit()
+				writeJSON(w, 200, `{"repo":"colette-api","before_deploying":`+tc.items+`}`)
+			}
+
+			code := r.deploy(tc.flags...)
+
+			if code != 1 || r.h.errb.String() != refusedMain {
+				t.Errorf("code = %d, stderr %q, want %q", code, r.h.errb, refusedMain)
+			}
+			r.assertNoDeploy()
+		})
+	}
+}
+
+// git breaking only once the question is answered stops the deploy like any other git failure.
+func TestDeployWhenGitFailsAtTheRecheck(t *testing.T) {
+	for _, failing := range []string{
+		"branch --show-current",
+		"status --porcelain --untracked-files=normal",
+		"rev-parse HEAD",
+	} {
+		t.Run(failing, func(t *testing.T) {
+			r := newDeployRig(t)
+			r.items = openItems
+			broken := r.gitFailing(failing)
+			r.h.deps.Stdin = &changingStdin{change: func() { t.Setenv("PATH", broken) }, answer: strings.NewReader("y\n")}
+
+			code := r.deploy()
+
+			if code != 1 || r.h.errb.String() != "git broke\n" {
+				t.Errorf("code = %d, stderr %q", code, r.h.errb)
+			}
+			r.assertNoDeploy()
+		})
+	}
+}
+
 func TestDeployYesGoesOnWithoutAsking(t *testing.T) {
 	r := newDeployRig(t)
 	r.items = openItems
@@ -651,6 +803,9 @@ func TestDeployWhenCadreCantAnswer(t *testing.T) {
 		"a 500":              func(w http.ResponseWriter) { writeJSON(w, 500, `{}`) },
 		"a dropped request":  func(http.ResponseWriter) { panic(http.ErrAbortHandler) },
 		"an unreadable body": func(w http.ResponseWriter) { writeJSON(w, 200, `not json`) },
+		"an empty object":    func(w http.ResponseWriter) { writeJSON(w, 200, `{}`) },
+		"a null list":        func(w http.ResponseWriter) { writeJSON(w, 200, `{"repo":"colette-api","before_deploying":null}`) },
+		"a renamed key":      func(w http.ResponseWriter) { writeJSON(w, 200, `{"repo":"colette-api","open_items":[]}`) },
 	} {
 		for _, flags := range [][]string{nil, {"--yes"}} {
 			t.Run(fmt.Sprintf("%s %v", name, flags), func(t *testing.T) {
@@ -691,7 +846,7 @@ func TestDeployJSON(t *testing.T) {
 	if r.h.out.String() != want {
 		t.Errorf("stdout = %q, want %q", r.h.out, want)
 	}
-	if want := "fly output\n" + deployedLine(sha); r.h.errb.String() != want {
+	if want := "fly output\nfly warning\n" + deployedLine(sha); r.h.errb.String() != want {
 		t.Errorf("stderr = %q, want %q", r.h.errb, want)
 	}
 }
