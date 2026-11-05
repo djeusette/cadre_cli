@@ -169,29 +169,55 @@ func findApp(_ context.Context, d *deployment) error {
 	return nil
 }
 
-// pickConfig takes the target's config, else fly.production.toml, else fly.toml, and the file must be at the checkout's
-// top level: without it, fly may fall back to the app's remote config.
-func pickConfig(_ context.Context, d *deployment) error {
+// pickConfig takes the target's config, else fly.production.toml, else fly.toml. Only a committed file counts, so an
+// ignored local file never decides what deploys. The first committed one is the choice, and it must be on disk too:
+// without it, fly may fall back to the app's remote config.
+func pickConfig(ctx context.Context, d *deployment) error {
 	candidates, missing := []string{"fly.production.toml", "fly.toml"}, "Neither fly.production.toml nor fly.toml is"
 	if stored, _ := d.settings["config"].(string); stored != "" {
 		candidates, missing = []string{stored}, stored+" isn't"
 	}
 	for _, file := range candidates {
-		found, err := d.inCheckout(file)
+		committed, err := d.committed(ctx, file)
 		if err != nil {
 			return err
 		}
-		if found {
-			d.config = file
-			return nil
+		if committed {
+			return d.useConfig(file)
 		}
 	}
+	return d.noConfig(missing)
+}
+
+// committed reports whether file is a tracked file inside the checkout. The clean check has passed, so tracked is
+// committed.
+func (d *deployment) committed(ctx context.Context, file string) (bool, error) {
+	if !filepath.IsLocal(file) {
+		return false, nil
+	}
+	return d.checkout.Tracked(ctx, file)
+}
+
+// useConfig settles on a committed file, or refuses it. It never moves on to the next candidate.
+func (d *deployment) useConfig(file string) error {
+	found, err := d.inCheckout(file)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return d.noConfig(file + " isn't")
+	}
+	d.config = file
+	return nil
+}
+
+func (d *deployment) noConfig(missing string) error {
 	return fmt.Errorf("%s in this checkout. Set the right file with cadre repo set %s --fly-app %s --fly-config <file>.",
 		missing, d.repository.Name, d.app)
 }
 
-// inCheckout reports whether file is at the checkout's top level, where a folder doesn't count, so a stored "." is
-// missing. A file that can't be read is an error, not a missing file: reading it as missing could pick the wrong config.
+// inCheckout reports whether file, relative to the top level, is a file on disk, following links. A folder or a link
+// that leads nowhere is missing. A file that can't be read is an error: the person needs to know why, not that it's gone.
 func (d *deployment) inCheckout(file string) (bool, error) {
 	info, err := os.Stat(filepath.Join(d.checkout.Dir, file))
 	switch {
