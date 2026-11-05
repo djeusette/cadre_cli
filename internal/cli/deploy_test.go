@@ -290,6 +290,12 @@ func (r *deployRig) stagedChange() {
 func (r *deployRig) unstagedChange() { r.write(r.clone, "README.md", "changed") }
 func (r *deployRig) untrackedFile()  { r.write(r.clone, "untracked.txt", "untracked") }
 func (r *deployRig) localCommit()    { r.commit(r.clone, "local.txt") }
+func (r *deployRig) hiddenChange(mark string) {
+	r.git(r.clone, "update-index", mark, "README.md")
+	r.write(r.clone, "README.md", "changed")
+}
+func (r *deployRig) skipWorktreeChange()    { r.hiddenChange("--skip-worktree") }
+func (r *deployRig) assumeUnchangedChange() { r.hiddenChange("--assume-unchanged") }
 func (r *deployRig) commitOnOrigin() {
 	second := filepath.Join(r.root, "second")
 	r.git(r.root, "clone", r.origin, second)
@@ -490,6 +496,8 @@ func TestDeployRefuses(t *testing.T) {
 		{"a staged change", (*deployRig).stagedChange, refusedClean},
 		{"an unstaged change", (*deployRig).unstagedChange, refusedClean},
 		{"an untracked file", (*deployRig).untrackedFile, refusedClean},
+		{"a change under skip-worktree", (*deployRig).skipWorktreeChange, refusedClean},
+		{"a change under assume-unchanged", (*deployRig).assumeUnchangedChange, refusedClean},
 		{"a local commit", (*deployRig).localCommit, refusedMain},
 		{"a commit pushed from a second clone", (*deployRig).commitOnOrigin, refusedMain},
 		{"targets with only render", (*deployRig).onlyRender, refusedApp},
@@ -580,6 +588,19 @@ func TestDeployWhenFetchFails(t *testing.T) {
 	r.assertNoDeploy()
 }
 
+// With main gone from origin, the origin/main left here is stale, so it can't stand for what origin has.
+func TestDeployWhenMainIsGoneFromOrigin(t *testing.T) {
+	r := newDeployRig(t)
+	r.git(r.origin, "update-ref", "-d", "refs/heads/main")
+
+	code := r.deploy()
+
+	if code != 1 || !strings.HasPrefix(r.h.errb.String(), "Could not fetch origin: ") {
+		t.Errorf("code = %d, stderr %q", code, r.h.errb)
+	}
+	r.assertNoDeploy()
+}
+
 // A git call that fails stops the deploy: it never reads as clean, or as main matching.
 func TestDeployWhenGitFails(t *testing.T) {
 	for _, tc := range []struct {
@@ -588,9 +609,10 @@ func TestDeployWhenGitFails(t *testing.T) {
 	}{
 		{"branch --show-current", "git broke\n"},
 		{"status --porcelain --untracked-files=normal", "git broke\n"},
-		{"fetch origin", "Could not fetch origin: git broke\n"},
+		{"ls-files -v", "git broke\n"},
+		{"fetch origin +refs/heads/main:refs/remotes/origin/main", "Could not fetch origin: git broke\n"},
 		{"rev-parse HEAD", "git broke\n"},
-		{"rev-parse refs/remotes/origin/main", refusedMain},
+		{"rev-parse --verify refs/remotes/origin/main", refusedMain},
 	} {
 		t.Run(tc.failing, func(t *testing.T) {
 			r := newDeployRig(t)
@@ -738,6 +760,8 @@ func TestDeployRechecksAfterTheQuestion(t *testing.T) {
 		{"an edit to a tracked file", (*deployRig).unstagedChange, refusedClean},
 		{"a staged change", (*deployRig).stagedChange, refusedClean},
 		{"an untracked file", (*deployRig).untrackedFile, refusedClean},
+		{"a change under skip-worktree", (*deployRig).skipWorktreeChange, refusedClean},
+		{"a change under assume-unchanged", (*deployRig).assumeUnchangedChange, refusedClean},
 		{"a switch to another branch", (*deployRig).anotherBranch, refusedBranch},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -793,6 +817,7 @@ func TestDeployWhenGitFailsAtTheRecheck(t *testing.T) {
 	for _, failing := range []string{
 		"branch --show-current",
 		"status --porcelain --untracked-files=normal",
+		"ls-files -v",
 		"rev-parse HEAD",
 	} {
 		t.Run(failing, func(t *testing.T) {
