@@ -1,17 +1,19 @@
 package cli
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"unicode"
 
 	"github.com/djeusette/cadre_cli/internal/api"
@@ -37,7 +39,7 @@ type deployment struct {
 	settings   map[string]any // the fly target's
 	app        string
 	config     string
-	fly        string // the path to fly or flyctl
+	fly        string // the path to flyctl or fly
 }
 
 // deployChecks run in this order. The first to return an error ends the deploy, with that error as the refusal.
@@ -230,11 +232,11 @@ func (d *deployment) inCheckout(file string) (bool, error) {
 	}
 }
 
-// findFly finds fly, or flyctl as some installs name it, and asks it who is signed in.
+// findFly finds flyctl, then fly, which comes second as it is also Concourse's CLI, and asks it who is signed in.
 func findFly(ctx context.Context, d *deployment) error {
-	fly, err := exec.LookPath("fly")
+	fly, err := exec.LookPath("flyctl")
 	if err != nil {
-		fly, err = exec.LookPath("flyctl")
+		fly, err = exec.LookPath("fly")
 	}
 	if err != nil {
 		return errFlyNotFound
@@ -278,13 +280,29 @@ func oneLine(text string) string {
 // answeredYes reads one line. Only y and yes count, and never a line that stdin ended before finishing: with nothing
 // to read, as under Claude Code, the answer is no. Nobody pressed return then, so it ends the question's line itself.
 func (s *session) answeredYes() bool {
-	line, err := bufio.NewReader(s.env.stdin()).ReadString('\n')
+	line, err := readLine(s.env.stdin())
 	if err != nil {
 		fmt.Fprintln(s.progress())
 		return false
 	}
 	answer := strings.ToLower(strings.TrimSpace(line))
 	return answer == "y" || answer == "yes"
+}
+
+// readLine reads up to the newline one byte at a time, as a buffered read would take what follows, which is fly's. A
+// line that r ends before finishing is an error.
+func readLine(r io.Reader) (string, error) {
+	var line []byte
+	var next [1]byte
+	for {
+		if _, err := io.ReadFull(r, next[:]); err != nil {
+			return "", err
+		}
+		if next[0] == '\n' {
+			return string(line), nil
+		}
+		line = append(line, next[0])
+	}
 }
 
 // checkUnchanged repeats the local checks right before fly. The question can wait for minutes, and fly ships the
@@ -314,11 +332,42 @@ func (s *session) flyDeploy(ctx context.Context, d *deployment) int {
 	cmd.Stdin = s.env.stdin()
 	cmd.Stdout = s.progress()
 	cmd.Stderr = s.env.Stderr
-	if err := cmd.Run(); err != nil {
+	if err := runOutlivingSignals(cmd); err != nil {
 		return s.flyExitCode(err)
 	}
 	s.reportDeployed(d)
 	return 0
+}
+
+// runOutlivingSignals runs cmd with cadre staying up until it ends, whatever signal comes, so the status is cmd's. Dying
+// first would leave a deploy running with nobody to report how it went.
+func runOutlivingSignals(cmd *exec.Cmd) error {
+	sigs := make(chan os.Signal, 2)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigs)
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan struct{})
+	defer close(done)
+	go forwardSignals(sigs, done, func(sig os.Signal) { _ = cmd.Process.Signal(sig) })
+	return cmd.Wait()
+}
+
+// forwardSignals passes each SIGTERM on sigs to forward, as fly wouldn't otherwise receive one, until done is closed.
+// SIGINT never goes through: the terminal sends it to the whole group, and a second one would make fly abort.
+func forwardSignals(sigs <-chan os.Signal, done <-chan struct{}, forward func(os.Signal)) {
+	for {
+		select {
+		case sig := <-sigs:
+			if sig == syscall.SIGTERM {
+				forward(sig)
+			}
+		case <-done:
+			return
+		}
+	}
 }
 
 // flyExitCode is the code fly ended with, where a signal, which leaves none, reads as 1.

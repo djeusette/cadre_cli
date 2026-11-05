@@ -65,6 +65,17 @@ echo "fly warning" >&2
 exit "$FAKE_FLY_EXIT"
 `
 
+// signalledFly sends $FAKE_FLY_SIGNAL to cadre, its parent, then gives cadre time to pass it on. A signal it gets shows
+// in $FAKE_FLY_LOG, and each way of ending has its own status.
+const signalledFly = `#!/bin/sh
+[ "$1" = auth ] && exit 0
+trap 'echo TERM > "$FAKE_FLY_LOG"; exit 7' TERM
+trap 'echo INT > "$FAKE_FLY_LOG"; exit 8' INT
+kill -"$FAKE_FLY_SIGNAL" "$PPID"
+for i in 1 2 3 4 5 6 7 8 9 10; do /bin/sleep 0.05; done
+exit 9
+`
+
 // deployRig is a clean clone of colette-club/colette-api to deploy from, a Cadre server that answers for it, and a
 // fake fly. PATH holds only the fake and a link to git, so no test can reach the real fly.
 type deployRig struct {
@@ -563,6 +574,37 @@ func TestDeployWhenFlyIsKilled(t *testing.T) {
 	}
 }
 
+// A signal while fly runs doesn't end cadre first: it waits, and ends with fly's status. SIGTERM reaches fly only through
+// cadre. SIGINT never does, as the terminal sends it to the whole group and a second one would make fly abort.
+func TestDeployOutlivesASignalWhileFlyRuns(t *testing.T) {
+	for _, tc := range []struct {
+		signal string
+		code   int
+		flySaw string
+	}{
+		{"TERM", 7, "TERM\n"},
+		{"INT", 9, ""},
+	} {
+		t.Run(tc.signal, func(t *testing.T) {
+			r := newDeployRig(t)
+			r.installFly("fly", signalledFly)
+			t.Setenv("FAKE_FLY_SIGNAL", tc.signal)
+
+			code := r.deploy()
+
+			if code != tc.code {
+				t.Errorf("code = %d, want %d", code, tc.code)
+			}
+			if saw, _ := os.ReadFile(r.log); string(saw) != tc.flySaw {
+				t.Errorf("fly saw %q, want %q", saw, tc.flySaw)
+			}
+			if strings.Contains(r.h.out.String(), "Deployed") {
+				t.Errorf("stdout = %q", r.h.out)
+			}
+		})
+	}
+}
+
 func TestDeployWhenFlyCantStart(t *testing.T) {
 	r := newDeployRig(t)
 	r.installFly("fly", "#!/bin/sh\n/bin/rm \"$0\"\n") // gone by the time cadre runs fly deploy
@@ -577,7 +619,7 @@ func TestDeployWhenFlyCantStart(t *testing.T) {
 	}
 }
 
-func TestDeployFallsBackToFlyctl(t *testing.T) {
+func TestDeployWithOnlyFlyctl(t *testing.T) {
 	r := newDeployRig(t)
 	if err := os.Remove(filepath.Join(r.flyDir, "fly")); err != nil {
 		t.Fatal(err)
@@ -588,6 +630,22 @@ func TestDeployFallsBackToFlyctl(t *testing.T) {
 		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
 	}
 	r.flyRan()
+}
+
+// fly is also Concourse's CLI, so with both on the PATH that one is never called, not even to ask who is signed in.
+func TestDeployPrefersFlyctl(t *testing.T) {
+	r := newDeployRig(t)
+	concourse := filepath.Join(r.root, "concourse.log")
+	r.installFly("fly", "#!/bin/sh\necho \"$*\" >> '"+concourse+"'\n")
+	r.installFly("flyctl", fakeFly)
+
+	if code := r.deploy(); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+	}
+	r.flyRan()
+	if raw, err := os.ReadFile(concourse); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("Concourse's fly ran: %q (%v)", raw, err)
+	}
 }
 
 func TestDeployRefuses(t *testing.T) {
@@ -808,6 +866,29 @@ func TestDeployAsksAboutOpenItems(t *testing.T) {
 			}
 			r.assertNoDeploy()
 		})
+	}
+}
+
+// The answer takes its own line and no more: what follows is for fly, which reads the same stdin.
+func TestDeployLeavesFlyTheInputAfterTheAnswer(t *testing.T) {
+	r := newDeployRig(t)
+	r.items = openItems
+	piped, input, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { piped.Close() })
+	if _, err := input.WriteString("y\nrest\n"); err != nil {
+		t.Fatal(err)
+	}
+	input.Close()
+	r.h.deps.Stdin = piped
+
+	if code := r.deploy(); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+	}
+	if _, _, stdin := r.flyRan(); stdin != "rest" {
+		t.Errorf("fly read %q from stdin, want %q", stdin, "rest")
 	}
 }
 
