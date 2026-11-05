@@ -23,6 +23,7 @@ const (
 	refusedCheckout = "This folder isn't a checkout of colette-club/colette-api. Run cadre deploy in one.\n"
 	refusedBranch   = "Not on main. Run git switch main.\n"
 	refusedClean    = "Uncommitted changes or untracked files. Commit or stash them first.\n"
+	refusedMarked   = "Files marked skip-worktree or assume-unchanged can hide changes. Clear the marks, listed by git ls-files -v.\n"
 	refusedMain     = "main differs from origin/main. Run git pull, or push your commits, then deploy again.\n"
 	refusedApp      = "colette-api has no Fly app. Connect it with cadre repo set colette-api --fly-app <app>.\n"
 	refusedFly      = "fly isn't installed. See https://fly.io/docs/flyctl/install/.\n"
@@ -32,7 +33,7 @@ const (
 
 const refusedNoConfig = "Neither fly.production.toml nor fly.toml is in this checkout. Set the right file with cadre repo set colette-api --fly-app colette-api-prod --fly-config <file>.\n"
 
-// refusedConfig is the refusal for a stored config file the checkout doesn't have.
+// refusedConfig is the refusal for a stored config that doesn't qualify, or a committed default that isn't on disk.
 func refusedConfig(file string) string {
 	return file + " isn't in this checkout. Set the right file with cadre repo set colette-api --fly-app colette-api-prod --fly-config <file>.\n"
 }
@@ -63,6 +64,17 @@ echo "$line" >> "$FAKE_FLY_LOG"
 echo "fly output"
 echo "fly warning" >&2
 exit "$FAKE_FLY_EXIT"
+`
+
+// signalledFly sends $FAKE_FLY_SIGNAL to cadre, its parent, then gives cadre time to pass it on. A signal it gets shows
+// in $FAKE_FLY_LOG, and each way of ending has its own status.
+const signalledFly = `#!/bin/sh
+[ "$1" = auth ] && exit 0
+trap 'echo TERM > "$FAKE_FLY_LOG"; exit 7' TERM
+trap 'echo INT > "$FAKE_FLY_LOG"; exit 8' INT
+kill -"$FAKE_FLY_SIGNAL" "$PPID"
+for i in 1 2 3 4 5 6 7 8 9 10; do /bin/sleep 0.05; done
+exit 9
 `
 
 // deployRig is a clean clone of colette-club/colette-api to deploy from, a Cadre server that answers for it, and a
@@ -182,13 +194,23 @@ func (r *deployRig) startServer() {
 
 func (r *deployRig) git(dir string, args ...string) string {
 	r.t.Helper()
+	out, err := tryGit(dir, args...)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return out
+}
+
+// tryGit returns git's failure instead of failing the test, for a server handler: Fatal only works on the test's own
+// goroutine.
+func tryGit(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		r.t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		return "", fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, out)
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (r *deployRig) write(dir, name, content string) {
@@ -210,6 +232,53 @@ func (r *deployRig) pushed(name string) {
 	r.t.Helper()
 	r.commit(r.clone, name)
 	r.git(r.clone, "push", "origin", "main")
+}
+
+// ignored commits a .gitignore for name and leaves name on disk, so the clone stays clean and level with origin.
+func (r *deployRig) ignored(name string) {
+	r.t.Helper()
+	r.write(r.clone, ".gitignore", name+"\n")
+	r.git(r.clone, "add", ".gitignore")
+	r.git(r.clone, "commit", "-m", "ignore "+name)
+	r.git(r.clone, "push", "origin", "main")
+	r.write(r.clone, name, name)
+}
+
+// danglingLink commits name as a link that leads nowhere.
+func (r *deployRig) danglingLink(name string) {
+	r.t.Helper()
+	r.link(name, "nowhere.toml")
+}
+
+// linkThroughAFile commits name as a link whose path goes through a file, which stat reads as ENOTDIR.
+func (r *deployRig) linkThroughAFile(name string) {
+	r.t.Helper()
+	r.link(name, "README.md/fly.toml")
+}
+
+func (r *deployRig) link(name, target string) {
+	r.t.Helper()
+	if err := os.Symlink(target, filepath.Join(r.clone, name)); err != nil {
+		r.t.Fatal(err)
+	}
+	r.git(r.clone, "add", name)
+	r.git(r.clone, "commit", "-m", name)
+	r.git(r.clone, "push", "origin", "main")
+}
+
+// pushedInFolder commits and pushes file in folder, and returns its path from the top level.
+func (r *deployRig) pushedInFolder(folder, file string) string {
+	r.t.Helper()
+	if err := os.Mkdir(filepath.Join(r.clone, folder), 0o755); err != nil {
+		r.t.Fatal(err)
+	}
+	name := folder + "/" + file
+	r.pushed(name)
+	return name
+}
+
+func (r *deployRig) storedConfig(file string) {
+	r.targets = `{"platform":"fly","settings":{"app":"colette-api-prod","config":"` + file + `"},"tracked":true}`
 }
 
 func (r *deployRig) head() string {
@@ -279,6 +348,9 @@ func deployedLine(sha string) string {
 func (r *deployRig) anotherRepo() {
 	r.git(r.clone, "remote", "set-url", "origin", filepath.Join(r.root, "colette-club", "colette-web.git"))
 }
+func (r *deployRig) originWithNoOwner() {
+	r.git(r.clone, "remote", "set-url", "origin", "https://github.com/colette-api")
+}
 func (r *deployRig) outsideGit()    { r.t.Chdir(r.t.TempDir()) }
 func (r *deployRig) noOrigin()      { r.git(r.clone, "remote", "remove", "origin") }
 func (r *deployRig) anotherBranch() { r.git(r.clone, "switch", "-c", "feature") }
@@ -290,6 +362,12 @@ func (r *deployRig) stagedChange() {
 func (r *deployRig) unstagedChange() { r.write(r.clone, "README.md", "changed") }
 func (r *deployRig) untrackedFile()  { r.write(r.clone, "untracked.txt", "untracked") }
 func (r *deployRig) localCommit()    { r.commit(r.clone, "local.txt") }
+func (r *deployRig) hiddenChange(mark string) {
+	r.git(r.clone, "update-index", mark, "README.md")
+	r.write(r.clone, "README.md", "changed")
+}
+func (r *deployRig) skipWorktreeChange()    { r.hiddenChange("--skip-worktree") }
+func (r *deployRig) assumeUnchangedChange() { r.hiddenChange("--assume-unchanged") }
 func (r *deployRig) commitOnOrigin() {
 	second := filepath.Join(r.root, "second")
 	r.git(r.root, "clone", r.origin, second)
@@ -309,14 +387,22 @@ func (r *deployRig) noConfigFile() {
 	r.git(r.clone, "commit", "-m", "no config")
 	r.git(r.clone, "push", "origin", "main")
 }
-func (r *deployRig) storedConfigMissing() { r.targets = storedTarget }
-func (r *deployRig) storedConfigIsAFolder() {
-	r.targets = `{"platform":"fly","settings":{"app":"colette-api-prod","config":"."},"tracked":true}`
+func (r *deployRig) onlyAnIgnoredConfig() {
+	r.noConfigFile()
+	r.ignored("fly.toml")
 }
-func (r *deployRig) flyMissing()   { r.t.Setenv("PATH", r.gitDir) }
-func (r *deployRig) flySignedOut() { r.t.Setenv("FAKE_FLY_AUTH", "1") }
-func (r *deployRig) cadreFails()   { r.next = func(w http.ResponseWriter) { writeJSON(w, 500, `{}`) } }
-func (r *deployRig) repoUnknown()  { r.repoGone = true }
+func (r *deployRig) productionConfigDangling()     { r.danglingLink("fly.production.toml") }
+func (r *deployRig) productionConfigThroughAFile() { r.linkThroughAFile("fly.production.toml") }
+func (r *deployRig) onlyConfigDangling() {
+	r.noConfigFile()
+	r.danglingLink("fly.toml")
+}
+func (r *deployRig) storedConfigMissing()   { r.targets = storedTarget }
+func (r *deployRig) storedConfigIsAFolder() { r.storedConfig(".") }
+func (r *deployRig) flyMissing()            { r.t.Setenv("PATH", r.gitDir) }
+func (r *deployRig) flySignedOut()          { r.t.Setenv("FAKE_FLY_AUTH", "1") }
+func (r *deployRig) cadreFails()            { r.next = func(w http.ResponseWriter) { writeJSON(w, 500, `{}`) } }
+func (r *deployRig) repoUnknown()           { r.repoGone = true }
 
 func TestDeployRunsFlyWithTheCommitAsTheLabel(t *testing.T) {
 	r := newDeployRig(t)
@@ -381,6 +467,93 @@ func TestDeployPicksTheConfig(t *testing.T) {
 	}
 }
 
+// An ignored file is only on this machine, so it is passed over for the committed one.
+func TestDeployPassesOverAnIgnoredProductionConfig(t *testing.T) {
+	r := newDeployRig(t)
+	r.ignored("fly.production.toml")
+
+	if code := r.deploy(); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+	}
+	if _, args, _ := r.flyRan(); !strings.Contains(args, " --config fly.toml ") {
+		t.Errorf("fly ran with %q, want --config fly.toml", args)
+	}
+}
+
+// The server accepts any path inside the repo, so a stored config may not be in git's exact form. fly gets the clean path.
+func TestDeployWithAStoredConfigInAnyForm(t *testing.T) {
+	for _, tc := range []struct{ stored, want string }{
+		{"deploy/fly.toml", "deploy/fly.toml"},
+		{"./fly.toml", "fly.toml"},
+		{"deploy/../fly.toml", "fly.toml"},
+		{"deploy/./fly.toml", "deploy/fly.toml"},
+		{"deploy//fly.toml", "deploy/fly.toml"},
+	} {
+		t.Run(tc.stored, func(t *testing.T) {
+			r := newDeployRig(t)
+			r.pushedInFolder("deploy", "fly.toml")
+			r.storedConfig(tc.stored)
+
+			if code := r.deploy(); code != 0 {
+				t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+			}
+			if _, args, _ := r.flyRan(); !strings.Contains(args, " --config "+tc.want+" ") {
+				t.Errorf("fly ran with %q, want --config %s", args, tc.want)
+			}
+		})
+	}
+}
+
+// A stored config must be a committed file in the checkout, whatever else is on disk.
+func TestDeployRefusesAStoredConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		file func(*deployRig) string
+	}{
+		{"that is ignored", func(r *deployRig) string {
+			r.ignored("fly.custom.toml")
+			return "fly.custom.toml"
+		}},
+		{"above the checkout", func(r *deployRig) string {
+			r.write(r.root, "fly.toml", "outside")
+			return "../fly.toml"
+		}},
+		{"above the checkout, by way of a folder", func(r *deployRig) string {
+			r.write(r.root, "fly.toml", "outside")
+			return "deploy/../../fly.toml"
+		}},
+		{"that comes to the top level itself", func(*deployRig) string { return "deploy/.." }},
+		{"in another form, and not committed", func(*deployRig) string { return "./fly.custom.toml" }},
+		{"at an absolute path outside the checkout", func(r *deployRig) string {
+			r.write(r.root, "fly.toml", "outside")
+			return filepath.Join(r.root, "fly.toml")
+		}},
+		{"at the absolute path of a committed file", func(r *deployRig) string {
+			return filepath.Join(r.clone, "fly.toml")
+		}},
+		{"that is a committed folder of one file", func(r *deployRig) string {
+			r.pushedInFolder("deploy", "fly.toml")
+			return "deploy"
+		}},
+		{"that is a committed link to nowhere", func(r *deployRig) string {
+			r.danglingLink("fly.custom.toml")
+			return "fly.custom.toml"
+		}},
+		{"that is a committed link through a file", func(r *deployRig) string {
+			r.linkThroughAFile("fly.custom.toml")
+			return "fly.custom.toml"
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newDeployRig(t)
+			file := tc.file(r)
+			r.storedConfig(file)
+
+			r.assertRefused(r.deploy(), refusedConfig(file))
+		})
+	}
+}
+
 // A file that can't be read isn't a file that isn't there: guessing fly.toml could deploy the wrong config.
 func TestDeployWhenTheConfigCantBeRead(t *testing.T) {
 	r := newDeployRig(t)
@@ -395,6 +568,9 @@ func TestDeployWhenTheConfigCantBeRead(t *testing.T) {
 
 	if code != 1 || !strings.Contains(r.h.errb.String(), "fly.production.toml") {
 		t.Errorf("code = %d, stderr %q", code, r.h.errb)
+	}
+	if strings.Contains(r.h.errb.String(), "isn't in this checkout") {
+		t.Errorf("stderr = %q, want the error as it is", r.h.errb)
 	}
 	r.assertNoDeploy()
 }
@@ -449,6 +625,37 @@ func TestDeployWhenFlyIsKilled(t *testing.T) {
 	}
 }
 
+// A signal while fly runs doesn't end cadre first: it waits, and ends with fly's status. SIGTERM reaches fly only through
+// cadre. SIGINT never does, as the terminal sends it to the whole group and a second one would make fly abort.
+func TestDeployOutlivesASignalWhileFlyRuns(t *testing.T) {
+	for _, tc := range []struct {
+		signal string
+		code   int
+		flySaw string
+	}{
+		{"TERM", 7, "TERM\n"},
+		{"INT", 9, ""},
+	} {
+		t.Run(tc.signal, func(t *testing.T) {
+			r := newDeployRig(t)
+			r.installFly("fly", signalledFly)
+			t.Setenv("FAKE_FLY_SIGNAL", tc.signal)
+
+			code := r.deploy()
+
+			if code != tc.code {
+				t.Errorf("code = %d, want %d", code, tc.code)
+			}
+			if saw, _ := os.ReadFile(r.log); string(saw) != tc.flySaw {
+				t.Errorf("fly saw %q, want %q", saw, tc.flySaw)
+			}
+			if strings.Contains(r.h.out.String(), "Deployed") {
+				t.Errorf("stdout = %q", r.h.out)
+			}
+		})
+	}
+}
+
 func TestDeployWhenFlyCantStart(t *testing.T) {
 	r := newDeployRig(t)
 	r.installFly("fly", "#!/bin/sh\n/bin/rm \"$0\"\n") // gone by the time cadre runs fly deploy
@@ -463,7 +670,7 @@ func TestDeployWhenFlyCantStart(t *testing.T) {
 	}
 }
 
-func TestDeployFallsBackToFlyctl(t *testing.T) {
+func TestDeployWithOnlyFlyctl(t *testing.T) {
 	r := newDeployRig(t)
 	if err := os.Remove(filepath.Join(r.flyDir, "fly")); err != nil {
 		t.Fatal(err)
@@ -476,6 +683,22 @@ func TestDeployFallsBackToFlyctl(t *testing.T) {
 	r.flyRan()
 }
 
+// fly is also Concourse's CLI, so with both on the PATH that one is never called, not even to ask who is signed in.
+func TestDeployPrefersFlyctl(t *testing.T) {
+	r := newDeployRig(t)
+	concourse := filepath.Join(r.root, "concourse.log")
+	r.installFly("fly", "#!/bin/sh\necho \"$*\" >> '"+concourse+"'\n")
+	r.installFly("flyctl", fakeFly)
+
+	if code := r.deploy(); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+	}
+	r.flyRan()
+	if raw, err := os.ReadFile(concourse); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("Concourse's fly ran: %q (%v)", raw, err)
+	}
+}
+
 func TestDeployRefuses(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -483,6 +706,7 @@ func TestDeployRefuses(t *testing.T) {
 		want  string
 	}{
 		{"a clone of another repo", (*deployRig).anotherRepo, refusedCheckout},
+		{"an origin with a host and no owner", (*deployRig).originWithNoOwner, refusedCheckout},
 		{"a folder outside git", (*deployRig).outsideGit, refusedCheckout},
 		{"a clone with no origin", (*deployRig).noOrigin, refusedCheckout},
 		{"another branch", (*deployRig).anotherBranch, refusedBranch},
@@ -490,6 +714,8 @@ func TestDeployRefuses(t *testing.T) {
 		{"a staged change", (*deployRig).stagedChange, refusedClean},
 		{"an unstaged change", (*deployRig).unstagedChange, refusedClean},
 		{"an untracked file", (*deployRig).untrackedFile, refusedClean},
+		{"a change under skip-worktree", (*deployRig).skipWorktreeChange, refusedMarked},
+		{"a change under assume-unchanged", (*deployRig).assumeUnchangedChange, refusedMarked},
 		{"a local commit", (*deployRig).localCommit, refusedMain},
 		{"a commit pushed from a second clone", (*deployRig).commitOnOrigin, refusedMain},
 		{"targets with only render", (*deployRig).onlyRender, refusedApp},
@@ -498,6 +724,10 @@ func TestDeployRefuses(t *testing.T) {
 		{"a stored config the checkout doesn't have", (*deployRig).storedConfigMissing, refusedConfig("fly.custom.toml")},
 		{"a stored config that is a folder", (*deployRig).storedConfigIsAFolder, refusedConfig(".")},
 		{"neither config file", (*deployRig).noConfigFile, refusedNoConfig},
+		{"only an ignored fly.toml", (*deployRig).onlyAnIgnoredConfig, refusedNoConfig},
+		{"a committed fly.production.toml that leads nowhere", (*deployRig).productionConfigDangling, refusedConfig("fly.production.toml")},
+		{"a committed fly.toml that leads nowhere", (*deployRig).onlyConfigDangling, refusedConfig("fly.toml")},
+		{"a committed fly.production.toml that leads through a file", (*deployRig).productionConfigThroughAFile, refusedConfig("fly.production.toml")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newDeployRig(t)
@@ -553,11 +783,7 @@ func TestDeployMatchesTheRepoInAnyCase(t *testing.T) {
 
 func TestDeployIgnoresIgnoredFiles(t *testing.T) {
 	r := newDeployRig(t)
-	r.write(r.clone, ".gitignore", "ignored.log\n")
-	r.git(r.clone, "add", ".gitignore")
-	r.git(r.clone, "commit", "-m", "ignore")
-	r.git(r.clone, "push", "origin", "main")
-	r.write(r.clone, "ignored.log", "ignored")
+	r.ignored("ignored.log")
 
 	if code := r.deploy(); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
@@ -580,6 +806,19 @@ func TestDeployWhenFetchFails(t *testing.T) {
 	r.assertNoDeploy()
 }
 
+// With main gone from origin, the origin/main left here is stale, so it can't stand for what origin has.
+func TestDeployWhenMainIsGoneFromOrigin(t *testing.T) {
+	r := newDeployRig(t)
+	r.git(r.origin, "update-ref", "-d", "refs/heads/main")
+
+	code := r.deploy()
+
+	if code != 1 || !strings.HasPrefix(r.h.errb.String(), "Could not fetch origin: ") {
+		t.Errorf("code = %d, stderr %q", code, r.h.errb)
+	}
+	r.assertNoDeploy()
+}
+
 // A git call that fails stops the deploy: it never reads as clean, or as main matching.
 func TestDeployWhenGitFails(t *testing.T) {
 	for _, tc := range []struct {
@@ -588,9 +827,12 @@ func TestDeployWhenGitFails(t *testing.T) {
 	}{
 		{"branch --show-current", "git broke\n"},
 		{"status --porcelain --untracked-files=normal", "git broke\n"},
-		{"fetch origin", "Could not fetch origin: git broke\n"},
+		{"ls-files -v", "git broke\n"},
+		{"fetch origin +refs/heads/main:refs/remotes/origin/main", "Could not fetch origin: git broke\n"},
 		{"rev-parse HEAD", "git broke\n"},
-		{"rev-parse refs/remotes/origin/main", refusedMain},
+		{"rev-parse --verify refs/remotes/origin/main", refusedMain},
+		{"ls-files --full-name -- :(literal)fly.production.toml", "git broke\n"},
+		{"ls-files --full-name -- :(literal)fly.toml", "git broke\n"},
 	} {
 		t.Run(tc.failing, func(t *testing.T) {
 			r := newDeployRig(t)
@@ -599,6 +841,14 @@ func TestDeployWhenGitFails(t *testing.T) {
 			r.assertRefused(r.deploy(), tc.want)
 		})
 	}
+}
+
+func TestDeployWhenGitFailsOnAStoredConfig(t *testing.T) {
+	r := newDeployRig(t)
+	r.storedConfig("fly.toml")
+	t.Setenv("PATH", r.gitFailing("ls-files --full-name -- :(literal)fly.toml"))
+
+	r.assertRefused(r.deploy(), "git broke\n")
 }
 
 // git missing is not "this folder isn't a checkout": the error is printed as it is.
@@ -623,6 +873,16 @@ func TestDeployWithoutFly(t *testing.T) {
 
 func TestDeployWhenFlyIsNotSignedIn(t *testing.T) {
 	r := newDeployRig(t)
+	r.flySignedOut()
+
+	r.assertRefused(r.deploy(), refusedSignIn)
+}
+
+// A signed-out flyctl stops the deploy: it never falls through to a fly that would run.
+func TestDeployWhenFlyctlIsNotSignedIn(t *testing.T) {
+	r := newDeployRig(t)
+	r.installFly("fly", "#!/bin/sh\necho \"$*\" >> \"$FAKE_FLY_LOG\"\n")
+	r.installFly("flyctl", fakeFly)
 	r.flySignedOut()
 
 	r.assertRefused(r.deploy(), refusedSignIn)
@@ -653,6 +913,7 @@ func TestDeployAsksAboutOpenItems(t *testing.T) {
 		afterQuestion string // a read that fails or ends leaves the question's line open, so cadre ends it
 	}{
 		{"no", strings.NewReader("n\n"), ""},
+		{"no, with a yes on the next line", strings.NewReader("n\ny\n"), ""},
 		{"a bare return", strings.NewReader("\n"), ""},
 		{"something else", strings.NewReader("yep\n"), ""},
 		{"an empty stdin", strings.NewReader(""), "\n"},
@@ -677,6 +938,29 @@ func TestDeployAsksAboutOpenItems(t *testing.T) {
 			}
 			r.assertNoDeploy()
 		})
+	}
+}
+
+// The answer takes its own line and no more: what follows is for fly, which reads the same stdin.
+func TestDeployLeavesFlyTheInputAfterTheAnswer(t *testing.T) {
+	r := newDeployRig(t)
+	r.items = openItems
+	piped, input, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { piped.Close() })
+	if _, err := input.WriteString("y\nrest\n"); err != nil {
+		t.Fatal(err)
+	}
+	input.Close()
+	r.h.deps.Stdin = piped
+
+	if code := r.deploy(); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+	}
+	if _, _, stdin := r.flyRan(); stdin != "rest" {
+		t.Errorf("fly read %q from stdin, want %q", stdin, "rest")
 	}
 }
 
@@ -738,6 +1022,8 @@ func TestDeployRechecksAfterTheQuestion(t *testing.T) {
 		{"an edit to a tracked file", (*deployRig).unstagedChange, refusedClean},
 		{"a staged change", (*deployRig).stagedChange, refusedClean},
 		{"an untracked file", (*deployRig).untrackedFile, refusedClean},
+		{"a change under skip-worktree", (*deployRig).skipWorktreeChange, refusedMarked},
+		{"a change under assume-unchanged", (*deployRig).assumeUnchangedChange, refusedMarked},
 		{"a switch to another branch", (*deployRig).anotherBranch, refusedBranch},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -773,13 +1059,23 @@ func TestDeployRechecksWithoutAQuestion(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newDeployRig(t)
+			committed := make(chan error, 1)
 			r.next = func(w http.ResponseWriter) {
-				r.localCommit()
+				_, err := tryGit(r.clone, "commit", "--allow-empty", "-m", "local")
+				committed <- err
 				writeJSON(w, 200, `{"repo":"colette-api","before_deploying":`+tc.items+`}`)
 			}
 
 			code := r.deploy(tc.flags...)
 
+			select {
+			case err := <-committed:
+				if err != nil {
+					t.Fatal(err)
+				}
+			default:
+				t.Fatal("Cadre was never asked what is open")
+			}
 			if code != 1 || r.h.errb.String() != refusedMain {
 				t.Errorf("code = %d, stderr %q, want %q", code, r.h.errb, refusedMain)
 			}
@@ -793,6 +1089,7 @@ func TestDeployWhenGitFailsAtTheRecheck(t *testing.T) {
 	for _, failing := range []string{
 		"branch --show-current",
 		"status --porcelain --untracked-files=normal",
+		"ls-files -v",
 		"rev-parse HEAD",
 	} {
 		t.Run(failing, func(t *testing.T) {

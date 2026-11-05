@@ -21,8 +21,20 @@ func TestParseRepository(t *testing.T) {
 		"https://github.com/colette-club/colette-api.git/":        "colette-club/colette-api",
 		"https://x-token@github.com/Colette-Club/Colette-API.git": "Colette-Club/Colette-API",
 		"/tmp/x/colette-club/colette-api.git":                     "colette-club/colette-api",
-		"":                                                        "",
-		"colette-api":                                             "",
+		"ssh://git@github.com:22/colette-club/colette-api.git":    "colette-club/colette-api",
+		"github.com:colette-club/colette-api.git":                 "colette-club/colette-api",
+		"file:///tmp/x/colette-club/colette-api.git":              "colette-club/colette-api",
+		"":                                     "",
+		"colette-api":                          "",
+		"https://github.com/colette-api":       "",
+		"https://github.com/colette-api.git/":  "",
+		"https://github.com":                   "",
+		"git@github.com:colette-api.git":       "",
+		"github.com:colette-api.git":           "",
+		"ssh://git@github.com/colette-api.git": "",
+		"ssh://git@github.com:22/colette-api":  "",
+		"file:///colette-api.git":              "",
+		"git@github.com/colette-api":           "",
 	}
 	for remote, want := range cases {
 		got, ok := git.ParseRepository(remote)
@@ -123,10 +135,21 @@ func TestOpen(t *testing.T) {
 	}
 }
 
-func TestOpenOutsideACheckout(t *testing.T) {
+// outside is a folder with no repository in it or above it. git compares its ceiling with the real path, so a temp
+// folder reached through a link, as on macOS, is resolved first.
+func outside(t *testing.T) string {
+	t.Helper()
 	gitEnv(t)
-	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(t.TempDir()))
-	t.Chdir(t.TempDir())
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
+	return dir
+}
+
+func TestOpenOutsideACheckout(t *testing.T) {
+	t.Chdir(outside(t))
 	if _, err := git.Open(context.Background()); !errors.Is(err, git.ErrNotACheckout) {
 		t.Errorf("err = %v, want ErrNotACheckout", err)
 	}
@@ -192,6 +215,34 @@ func TestClean(t *testing.T) {
 	check("untracked, showUntrackedFiles no", false)
 }
 
+// A failed git never reads as clean.
+func TestCleanWhenGitFails(t *testing.T) {
+	got, err := git.Checkout{Dir: outside(t)}.Clean(context.Background())
+	if got || err == nil {
+		t.Errorf("Clean = (%v, %v), want (false, an error)", got, err)
+	}
+}
+
+// git status can't see a change to a file marked either way, and fly ships it all the same. Committing or stashing can't
+// help with that, so it isn't an ordinary dirty tree.
+func TestCleanSeesFilesHiddenFromStatus(t *testing.T) {
+	for _, mark := range []string{"--skip-worktree", "--assume-unchanged"} {
+		t.Run(mark, func(t *testing.T) {
+			dir := repo(t)
+			c := open(t, dir)
+			run(t, dir, "update-index", mark, "first.txt")
+			write(t, filepath.Join(dir, "first.txt"), "changed")
+
+			if out := run(t, dir, "status", "--porcelain"); out != "" {
+				t.Fatalf("git status sees the change: %q", out)
+			}
+			if got, err := c.Clean(context.Background()); got || !errors.Is(err, git.ErrMarkedFiles) {
+				t.Errorf("Clean = (%v, %v), want (false, ErrMarkedFiles)", got, err)
+			}
+		})
+	}
+}
+
 func TestHeadAndOriginMain(t *testing.T) {
 	_, work := clone(t)
 	c := open(t, work)
@@ -205,8 +256,11 @@ func TestHeadAndOriginMain(t *testing.T) {
 	}
 	commit(t, work, "local.txt")
 	newHead, _ := c.Head(ctx)
-	if om, _ := c.OriginMain(ctx); om == newHead {
-		t.Errorf("OriginMain should differ after a local commit")
+	if newHead == head {
+		t.Fatalf("Head did not move after a local commit")
+	}
+	if om, err := c.OriginMain(ctx); err != nil || om != head {
+		t.Errorf("OriginMain after a local commit = (%q, %v), want %q", om, err, head)
 	}
 }
 
@@ -234,5 +288,67 @@ func TestFetch(t *testing.T) {
 	err := c.Fetch(ctx)
 	if err == nil || strings.TrimSpace(err.Error()) == "" {
 		t.Errorf("Fetch without origin = %v, want git's message", err)
+	}
+}
+
+// A main deleted on origin must not leave a stale origin/main to compare with.
+func TestFetchWhenMainIsGoneFromOrigin(t *testing.T) {
+	origin, work := clone(t)
+	c := open(t, work)
+	run(t, origin, "update-ref", "-d", "refs/heads/main")
+
+	err := c.Fetch(context.Background())
+
+	if err == nil || !strings.Contains(err.Error(), "refs/heads/main") {
+		t.Errorf("Fetch = %v, want git's message", err)
+	}
+}
+
+// Fetch touches only origin/main, so the person's other refs stay, even with pruning on.
+func TestFetchLeavesOtherRefsAlone(t *testing.T) {
+	origin, work := clone(t)
+	run(t, origin, "branch", "feature", "main")
+	run(t, work, "fetch", "origin")
+	run(t, origin, "branch", "-D", "feature")
+	run(t, work, "config", "fetch.prune", "true")
+
+	if err := open(t, work).Fetch(context.Background()); err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	run(t, work, "rev-parse", "--verify", "refs/remotes/origin/feature")
+}
+
+func TestTracked(t *testing.T) {
+	dir := repo(t)
+	sub := filepath.Join(dir, "deploy")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, ".gitignore"), "ignored.txt\n")
+	write(t, filepath.Join(sub, "fly.toml"), "x")
+	run(t, dir, "add", ".")
+	run(t, dir, "commit", "-m", "more")
+	write(t, filepath.Join(dir, "untracked.txt"), "x")
+	write(t, filepath.Join(dir, "ignored.txt"), "x")
+	c := open(t, sub) // the file is relative to the top level, wherever cadre runs
+
+	for file, want := range map[string]bool{
+		"first.txt":       true,
+		"deploy/fly.toml": true,
+		"untracked.txt":   false,
+		"ignored.txt":     false,
+		"deploy":          false, // a folder, even one holding a single file
+		".":               false,
+	} {
+		if got, err := c.Tracked(context.Background(), file); err != nil || got != want {
+			t.Errorf("Tracked(%q) = (%v, %v), want %v", file, got, err, want)
+		}
+	}
+}
+
+func TestTrackedWhenGitFails(t *testing.T) {
+	got, err := git.Checkout{Dir: outside(t)}.Tracked(context.Background(), "first.txt")
+	if got || err == nil {
+		t.Errorf("Tracked = (%v, %v), want (false, an error)", got, err)
 	}
 }

@@ -3,6 +3,7 @@ package cli_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -176,6 +177,30 @@ func TestHelpFlagNeverRunsTheCommand(t *testing.T) {
 	}
 	if n := atomic.LoadInt32(hits); n != 0 {
 		t.Errorf("the server was called %d times", n)
+	}
+}
+
+// The help and the README say the same about which config file deploys.
+func TestDeployConfigIsDocumentedInStep(t *testing.T) {
+	srv, _ := helpServer(t)
+	h := newHarness(t, srv, nil)
+	if code := cli.Run([]string{"help", "deploy"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := "else fly.production.toml if it's committed, else fly.toml. That file must be committed and on disk"
+	for name, text := range map[string]string{"help": h.out.String(), "README": strings.ReplaceAll(string(readme), "`", "")} {
+		said := strings.Join(strings.Fields(text), " ")
+		if !strings.Contains(said, want) {
+			t.Errorf("%s doesn't say %q", name, want)
+		}
+		if strings.Contains(said, "never decides") { // a committed link can still lead to an ignored file
+			t.Errorf("%s overclaims", name)
+		}
 	}
 }
 

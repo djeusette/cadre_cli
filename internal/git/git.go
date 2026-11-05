@@ -13,6 +13,9 @@ import (
 // ErrNotACheckout means the working directory is outside a checkout, or the checkout has no origin.
 var ErrNotACheckout = errors.New("not a git checkout")
 
+// ErrMarkedFiles means a tracked file is marked skip-worktree or assume-unchanged. Its text is printed as it is.
+var ErrMarkedFiles = errors.New("Files marked skip-worktree or assume-unchanged can hide changes. Clear the marks, listed by git ls-files -v.")
+
 // Checkout is a checkout's top level.
 type Checkout struct{ Dir string }
 
@@ -43,15 +46,45 @@ func (c Checkout) Branch(ctx context.Context) (string, error) {
 	return run(ctx, c.Dir, "branch", "--show-current")
 }
 
-// Clean reports whether nothing is staged, modified or untracked. Ignored files don't count.
+// Clean reports whether nothing is staged, modified or untracked, and git status can see every tracked file. Ignored
+// files don't count. When git fails it is never clean. A tree that only has marked files is ErrMarkedFiles, not plain
+// false, as committing or stashing can't help with those.
 func (c Checkout) Clean(ctx context.Context) (bool, error) {
 	out, err := run(ctx, c.Dir, "status", "--porcelain", "--untracked-files=normal")
-	return out == "", err
+	if err != nil || out != "" {
+		return false, err
+	}
+	return c.statusSeesEveryFile(ctx)
 }
 
-// Fetch updates origin's branches. Its error holds git's message.
+// statusSeesEveryFile is ErrMarkedFiles when a tracked file is marked skip-worktree or assume-unchanged, which hide its
+// changes from git status. ls-files -v tags every other tracked file H.
+func (c Checkout) statusSeesEveryFile(ctx context.Context) (bool, error) {
+	out, err := run(ctx, c.Dir, "ls-files", "-v")
+	if err != nil {
+		return false, err
+	}
+	for line := range strings.Lines(out) {
+		if !strings.HasPrefix(line, "H") {
+			return false, ErrMarkedFiles
+		}
+	}
+	return true, nil
+}
+
+// Tracked reports whether file, relative to the top level, is exactly one tracked file, so a directory is false.
+func (c Checkout) Tracked(ctx context.Context, file string) (bool, error) {
+	out, err := run(ctx, c.Dir, "ls-files", "--full-name", "--", ":(literal)"+file)
+	if err != nil {
+		return false, err
+	}
+	return out == file, nil
+}
+
+// Fetch updates origin/main and nothing else. Naming the ref makes a main deleted on origin an error instead of a stale
+// origin/main, without pruning the person's other refs. Its error holds git's message.
 func (c Checkout) Fetch(ctx context.Context) error {
-	_, err := run(ctx, c.Dir, "fetch", "origin")
+	_, err := run(ctx, c.Dir, "fetch", "origin", "+refs/heads/main:refs/remotes/origin/main")
 	return err
 }
 
@@ -62,14 +95,14 @@ func (c Checkout) Head(ctx context.Context) (string, error) {
 
 // OriginMain is the full commit origin/main was at the last fetch.
 func (c Checkout) OriginMain(ctx context.Context) (string, error) {
-	return run(ctx, c.Dir, "rev-parse", "refs/remotes/origin/main")
+	return run(ctx, c.Dir, "rev-parse", "--verify", "refs/remotes/origin/main")
 }
 
-// ParseRepository takes a remote URL's last two path segments, without .git.
+// ParseRepository takes a remote's last two path segments, without .git. A host is never one of them.
 func ParseRepository(remote string) (string, bool) {
 	remote = strings.TrimRight(strings.TrimSpace(remote), "/")
 	remote = strings.TrimSuffix(remote, ".git")
-	parts := strings.FieldsFunc(remote, func(r rune) bool { return r == '/' || r == ':' })
+	parts := strings.FieldsFunc(remotePath(remote), func(r rune) bool { return r == '/' })
 	if len(parts) < 2 {
 		return "", false
 	}
@@ -78,6 +111,19 @@ func ParseRepository(remote string) (string, bool) {
 		return "", false
 	}
 	return owner + "/" + name, true
+}
+
+// remotePath is what follows the host of a URL or an scp form. As in git, a colon before any slash makes the scp form,
+// and anything else is a local path, which has no host.
+func remotePath(remote string) string {
+	if _, url, ok := strings.Cut(remote, "://"); ok {
+		_, path, _ := strings.Cut(url, "/")
+		return path
+	}
+	if host, path, ok := strings.Cut(remote, ":"); ok && !strings.Contains(host, "/") {
+		return path
+	}
+	return remote
 }
 
 // notACheckout maps git's own refusals to ErrNotACheckout, and leaves other failures, such as a missing git, as they are.

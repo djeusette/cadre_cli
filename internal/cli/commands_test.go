@@ -1779,6 +1779,7 @@ func TestRepoUsage(t *testing.T) {
 		{[]string{"repo", "set", "colette-api", "--fly-app", "colette-api-prod", "--platform", "render"}, usageRepoSet},
 		{[]string{"repo", "set", "colette-api", "--fly-app"}, usageRepoSet},
 		{[]string{"repo", "set", "colette-api", "--platform", "--fly-app"}, usageRepoSet},
+		{[]string{"repo", "set", "colette-api", "--platform", "--fly-config", "fly.toml"}, usageRepoSet},
 		{[]string{"repo", "set", "colette-api", "--fly-config", "fly.toml"}, usageRepoSet},
 		{[]string{"repo", "set", "colette-api", "--platform", "render", "--fly-config", "fly.toml"}, usageRepoSet},
 		{[]string{"repo", "set", "colette-api", "--fly-app", "colette-api-prod", "--fly-config"}, usageRepoSet},
