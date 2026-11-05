@@ -557,6 +557,7 @@ func TestDeployRefusesAStoredConfig(t *testing.T) {
 // cadre repo set replaces the target, so the command the refusal gives must carry a stored status URL over.
 func TestDeployRefusalKeepsTheStatusURL(t *testing.T) {
 	const command = " in this checkout. Set the right file with cadre repo set colette-api --fly-app colette-api-prod"
+	const placeholder = " --fly-config <file> --status-url <url> (see cadre repo show).\n"
 	for _, tc := range []struct{ name, target, want string }{
 		{
 			"with a status URL",
@@ -569,9 +570,9 @@ func TestDeployRefusalKeepsTheStatusURL(t *testing.T) {
 			"fly.custom.toml isn't" + command + " --status-url 'https://app.test/status' --fly-config <file>.\n",
 		},
 		{
-			"with a status URL that doesn't print",
-			`{"platform":"fly","settings":{"app":"colette-api-prod"},"status_url":"https://app.test/\u001b[2J\nFake","tracked":true}`,
-			"Neither fly.production.toml nor fly.toml is" + command + " --status-url 'https://app.test/ [2J Fake' --fly-config <file>.\n",
+			"with a status URL holding an ampersand",
+			`{"platform":"fly","settings":{"app":"colette-api-prod"},"status_url":"https://app.test/up?a=1&b=2%20c","tracked":true}`,
+			"Neither fly.production.toml nor fly.toml is" + command + " --status-url 'https://app.test/up?a=1&b=2%20c' --fly-config <file>.\n",
 		},
 		{
 			"with a status URL a shell would run",
@@ -581,7 +582,27 @@ func TestDeployRefusalKeepsTheStatusURL(t *testing.T) {
 		{
 			"with a status URL holding a single quote",
 			`{"platform":"fly","settings":{"app":"colette-api-prod"},"status_url":"https://app.test/up';id;'","tracked":true}`,
-			"Neither fly.production.toml nor fly.toml is" + command + ` --status-url 'https://app.test/up'\'';id;'\''' --fly-config <file>.` + "\n",
+			"Neither fly.production.toml nor fly.toml is" + command + placeholder,
+		},
+		{
+			"with a status URL holding a backslash before a quote",
+			`{"platform":"fly","settings":{"app":"colette-api-prod"},"status_url":"https://app.test/up\\';id;'","tracked":true}`,
+			"Neither fly.production.toml nor fly.toml is" + command + placeholder,
+		},
+		{
+			"with a status URL that doesn't print",
+			`{"platform":"fly","settings":{"app":"colette-api-prod"},"status_url":"https://app.test/\u001b[2J\nFake","tracked":true}`,
+			"Neither fly.production.toml nor fly.toml is" + command + placeholder,
+		},
+		{
+			"with a status URL holding a letter outside ASCII",
+			`{"platform":"fly","settings":{"app":"colette-api-prod"},"status_url":"https://app.test/café","tracked":true}`,
+			"Neither fly.production.toml nor fly.toml is" + command + placeholder,
+		},
+		{
+			"with a stored config and a status URL it can't quote",
+			`{"platform":"fly","settings":{"app":"colette-api-prod","config":"fly.custom.toml"},"status_url":"https://app.test/up'","tracked":true}`,
+			"fly.custom.toml isn't" + command + placeholder,
 		},
 		{
 			"with no status URL",
