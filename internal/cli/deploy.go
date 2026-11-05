@@ -238,11 +238,11 @@ func (s *session) settleOpenItems(items []api.BeforeDeployingItem, yes bool) boo
 	return s.answeredYes()
 }
 
-// oneLine replaces control characters with spaces. Item text comes from pull request descriptions, so it is untrusted:
-// an escape or a newline in it could forge the question.
+// oneLine replaces every rune that doesn't print with a space. Item text comes from pull request descriptions, so it is
+// untrusted: an escape, a newline or a bidi override in it could forge the question.
 func oneLine(text string) string {
 	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if !unicode.IsPrint(r) {
 			return ' '
 		}
 		return r

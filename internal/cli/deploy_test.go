@@ -673,12 +673,12 @@ func TestDeployAsksAboutOpenItems(t *testing.T) {
 // Item text comes from pull request descriptions, so it must not be able to move the cursor or forge the question.
 func TestDeployPrintsAnItemOnOneLine(t *testing.T) {
 	r := newDeployRig(t)
-	r.items = `[{"number":7,"url":"u","text":"Run \u001b[2Kthe\r\nDeploy anyway? [y/N] y\u009b"}]`
+	r.items = `[{"number":7,"url":"u","text":"Run \u001b[2Kthe\r\nDeploy anyway? [y/N] y\u009b\u202Ereversed\u2028café"}]`
 
 	if code := r.deploy("--yes"); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
 	}
-	want := "Before deploying:\n  #7 Run  [2Kthe  Deploy anyway? [y/N] y \nfly output\n" + deployedLine(r.head())
+	want := "Before deploying:\n  #7 Run  [2Kthe  Deploy anyway? [y/N] y  reversed café\nfly output\n" + deployedLine(r.head())
 	if r.h.out.String() != want {
 		t.Errorf("stdout = %q, want %q", r.h.out, want)
 	}
