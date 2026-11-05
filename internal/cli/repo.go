@@ -11,7 +11,7 @@ import (
 	"github.com/djeusette/cadre_cli/internal/api"
 )
 
-// runRepo dispatches `repo set <repo> (--fly-app <app> [--fly-config <file>]|--platform <name>)`, `repo unset <repo> --platform <name>`
+// runRepo dispatches `repo set <repo> (--fly-app <app> [--fly-config <file>] [--status-url <url>]|--platform <name>)`, `repo unset <repo> --platform <name>`
 // and `repo show <repo>`.
 func runRepo(env Env, asJSON bool, args []string) int {
 	if len(args) == 0 {
@@ -28,8 +28,12 @@ func runRepo(env Env, asJSON bool, args []string) int {
 		if !ok {
 			return usageError(env, "repo set")
 		}
+		statusURL, rest, ok := takeFlag(rest, "--status-url")
+		if !ok {
+			return usageError(env, "repo set")
+		}
 		platform, rest, ok := takeFlag(rest, "--platform")
-		if !ok || (flyApp == "") == (platform == "") || (flyApp == "" && flyConfig != "") {
+		if !ok || (flyApp == "") == (platform == "") || (flyApp == "" && (flyConfig != "" || statusURL != "")) {
 			return usageError(env, "repo set")
 		}
 		settings := map[string]string{}
@@ -44,7 +48,7 @@ func runRepo(env Env, asJSON bool, args []string) int {
 				fmt.Fprintf(s.env.Stderr, "Fly has its own flag: cadre repo set %s --fly-app <app>.\n", a[0])
 				return 1
 			}
-			return setTarget(ctx, s, a[0], platform, settings)
+			return setTarget(ctx, s, a[0], platform, settings, statusURL)
 		})
 	case "unset":
 		platform, rest, ok := takeFlag(rest, "--platform")
@@ -63,12 +67,12 @@ func runRepo(env Env, asJSON bool, args []string) int {
 	}
 }
 
-func setTarget(ctx context.Context, s *session, repo, platform string, settings map[string]string) int {
+func setTarget(ctx context.Context, s *session, repo, platform string, settings map[string]string, statusURL string) int {
 	if !s.requireKey() {
 		return 1
 	}
 
-	target, err := s.client.SetTarget(ctx, repo, platform, settings)
+	target, err := s.client.SetTarget(ctx, repo, platform, settings, statusURL)
 	if err != nil {
 		return s.repoFailure(err, repo, platform)
 	}
@@ -148,6 +152,9 @@ func repositoryText(repo api.Repository) string {
 	fmt.Fprintf(&b, "%s (%s)\n", repo.Name, repo.GitHubFullName)
 	for _, t := range repo.Targets {
 		fmt.Fprintf(&b, "  %-*s  %s\n", width, displayName(t.Platform), targetState(t))
+		if line := statusLine(t); line != "" {
+			fmt.Fprintf(&b, "  %s\n", line)
+		}
 	}
 	return b.String()
 }
@@ -167,6 +174,40 @@ func targetState(t api.Target) string {
 	}
 	pairs = append(pairs, lastDeployText(t.LastDeploy))
 	return strings.Join(pairs, ", ")
+}
+
+// statusLine is what show says about a target's live state, or empty when there is nothing to say. A target with a
+// status URL always gets one; one without gets a line only when the server still reports a live state, as a Fly app
+// can through its health checks.
+func statusLine(t api.Target) string {
+	state := liveText(t)
+	switch {
+	case t.StatusURL != "" && state == "":
+		return "Status URL " + t.StatusURL + ": not checked yet"
+	case t.StatusURL != "":
+		return "Status URL " + t.StatusURL + ": " + state
+	case state != "":
+		return "Status: " + state
+	default:
+		return ""
+	}
+}
+
+// liveText reads the target's live state, or is empty when it has none.
+func liveText(t api.Target) string {
+	switch t.Live {
+	case "live":
+		return "live"
+	case "not_live":
+		if t.NotLiveSince == nil {
+			return "not live"
+		}
+		return "not live since " + t.NotLiveSince.UTC().Format("Jan 2, 15:04")
+	case "not_checked":
+		return "not checked yet"
+	default:
+		return ""
+	}
 }
 
 // lastDeployText says when a target last deployed, in UTC, and the commit's first 7 characters.

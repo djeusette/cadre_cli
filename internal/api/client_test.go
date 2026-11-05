@@ -54,7 +54,7 @@ func TestEveryCallMapsTooManyRequests(t *testing.T) {
 		},
 		"show repository": func(c *api.Client) error { _, err := c.ShowRepository(ctx, "colette-api"); return err },
 		"set target": func(c *api.Client) error {
-			_, err := c.SetTarget(ctx, "colette-api", "fly", map[string]string{"app": "colette-api-prod"})
+			_, err := c.SetTarget(ctx, "colette-api", "fly", map[string]string{"app": "colette-api-prod"}, "")
 			return err
 		},
 		"unset target":   func(c *api.Client) error { _, err := c.UnsetTarget(ctx, "colette-site", "render"); return err },
@@ -569,7 +569,7 @@ func TestSetTarget(t *testing.T) {
 		io.WriteString(w, targetJSON)
 	})
 
-	got, err := c.SetTarget(context.Background(), "colette-api", "fly", map[string]string{"app": "colette-api-prod"})
+	got, err := c.SetTarget(context.Background(), "colette-api", "fly", map[string]string{"app": "colette-api-prod"}, "")
 
 	if err != nil || got.Repo != "colette-api" || got.Platform != "fly" || got.Settings["app"] != "colette-api-prod" || !got.Tracked {
 		t.Fatalf("got %+v, %v", got, err)
@@ -588,7 +588,7 @@ func TestSetTargetSendsEmptySettingsAsAnObject(t *testing.T) {
 		w.WriteHeader(200)
 		io.WriteString(w, `{"repo":"colette-site","platform":"render","settings":{},"tracked":false}`)
 	})
-	if _, err := c.SetTarget(context.Background(), "colette-site", "render", nil); err != nil {
+	if _, err := c.SetTarget(context.Background(), "colette-site", "render", nil, ""); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -613,7 +613,7 @@ func TestSetTargetStatuses(t *testing.T) {
 	}
 	for _, tc := range cases {
 		c := newClient(t, reply(tc.status, tc.body))
-		if _, err := c.SetTarget(context.Background(), "colette-api", "fly", nil); !tc.check(err) {
+		if _, err := c.SetTarget(context.Background(), "colette-api", "fly", nil, ""); !tc.check(err) {
 			t.Errorf("%d %s: err = %v", tc.status, tc.body, err)
 		}
 	}
@@ -830,5 +830,22 @@ func TestNextDeployErrors(t *testing.T) {
 		if _, err := c.NextDeploy(context.Background(), "colette-api"); !errors.Is(err, tc.want) {
 			t.Errorf("%d: err = %v", tc.status, err)
 		}
+	}
+}
+
+func TestSetTargetSendsAStatusURLAndReadsItBack(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		if string(b) != `{"settings":{"app":"colette-api-prod"},"status_url":"https://app.test/status"}` {
+			t.Errorf("body = %s", b)
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, `{"repo":"colette-api","platform":"fly","settings":{"app":"colette-api-prod"},"tracked":true,"status_url":"https://app.test/status","live":"not_live","not_live_since":"2026-11-05T08:14:00Z"}`)
+	})
+
+	got, err := c.SetTarget(context.Background(), "colette-api", "fly", map[string]string{"app": "colette-api-prod"}, "https://app.test/status")
+
+	if err != nil || got.StatusURL != "https://app.test/status" || got.Live != "not_live" || got.NotLiveSince == nil || got.NotLiveSince.UTC().Format("15:04") != "08:14" {
+		t.Fatalf("got %+v, %v", got, err)
 	}
 }

@@ -172,13 +172,14 @@ a milestone number, such as wish-reminders/2.`,
 			{
 				name:    "repo set",
 				summary: "Say where a repo deploys",
-				forms:   []string{"<repo> --fly-app <app> [--fly-config <file>]", "<repo> --platform <name>"},
+				forms:   []string{"<repo> --fly-app <app> [--fly-config <file>]", "<repo> --fly-app <app> [--status-url <url>]", "<repo> --platform <name>"},
 				about: `<repo> is the repo's name in Cadre, such as shop-api. Setting a platform again
-replaces its settings, so pass both --fly-app and --fly-config each time. Fly
-apps are found through the orgs connected with cadre fly org add.`,
+replaces its settings, so pass --fly-app, --fly-config and --status-url each
+time. Fly apps are found through the orgs connected with cadre fly org add.`,
 				flags: []helpRow{
 					{"--fly-app <app>", "Connect the repo to this Fly app, which cadre then tracks"},
 					{"--fly-config <file>", "The Fly config file it deploys with, for the whole team"},
+					{"--status-url <url>", "An https URL cadre checks to tell if the app is live"},
 					{"--platform <name>", "Name any other platform, which shows as not tracked"},
 					jsonFlag,
 				},

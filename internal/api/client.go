@@ -496,7 +496,12 @@ type Target struct {
 	Account  *string        `json:"account"` // the platform account that reads it, or nil
 	// LastDeploy is the latest deploy cadre saw, or nil when it saw none (or the server predates deploys).
 	LastDeploy *LastDeploy `json:"last_deploy"`
-	Raw        []byte      `json:"-"`
+	// StatusURL is the URL cadre checks to tell whether the app is live, or empty. Live is "live", "not_live",
+	// "not_checked" or empty when the target has no live state. NotLiveSince is set while Live is "not_live".
+	StatusURL    string     `json:"status_url"`
+	Live         string     `json:"live"`
+	NotLiveSince *time.Time `json:"not_live_since"`
+	Raw          []byte     `json:"-"`
 }
 
 // LastDeploy is a target's latest deploy. Commit is nil when cadre could not tie the deploy to a commit.
@@ -560,15 +565,20 @@ func (c *Client) NextDeploy(ctx context.Context, repo string) (NextDeploy, error
 	return next, nil
 }
 
-// SetTarget sets the repo's target on platform, replacing its settings. The server reads the platform first. It
+// SetTarget sets the repo's target on platform, replacing its settings. A non-empty statusURL is sent as the
+// top-level status_url; an empty one leaves the key out. The server reads the platform first. It
 // returns ErrRepositoryNotFound, ErrPlatformNotConnected, ErrPlatformUnreachable, ErrUnauthorized or a
 // *ValidationError when the server refuses it.
-func (c *Client) SetTarget(ctx context.Context, repo, platform string, settings map[string]string) (Target, error) {
+func (c *Client) SetTarget(ctx context.Context, repo, platform string, settings map[string]string, statusURL string) (Target, error) {
 	var target Target
 	if settings == nil {
 		settings = map[string]string{}
 	}
-	payload, err := json.Marshal(map[string]map[string]string{"settings": settings})
+	body := map[string]any{"settings": settings}
+	if statusURL != "" {
+		body["status_url"] = statusURL
+	}
+	payload, err := json.Marshal(body)
 	if err != nil {
 		return target, err
 	}

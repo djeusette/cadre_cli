@@ -2111,3 +2111,103 @@ func TestFlyOrgPrintsTheServersName(t *testing.T) {
 		t.Errorf("remove stdout = %q", h.out)
 	}
 }
+
+func TestRepoSetSendsStatusURL(t *testing.T) {
+	var got linkRequest
+	body := `{"repo":"colette-api","platform":"fly","settings":{"app":"colette-api-prod"},"tracked":true,"account":"colette","status_url":"https://app.test/status"}`
+	srv := linkServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	args := []string{"repo", "set", "colette-api", "--fly-app", "colette-api-prod", "--status-url", "https://app.test/status"}
+	if code := cli.Run(args, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	settings, _ := got.body["settings"].(map[string]any)
+	if got.body["status_url"] != "https://app.test/status" || len(got.body) != 2 || len(settings) != 1 || settings["app"] != "colette-api-prod" {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestRepoSetWithoutStatusURLSendsNone(t *testing.T) {
+	var got linkRequest
+	body := `{"repo":"colette-api","platform":"fly","settings":{"app":"colette-api-prod"},"tracked":true,"account":"colette"}`
+	srv := linkServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "set", "colette-api", "--fly-app", "colette-api-prod"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if _, present := got.body["status_url"]; present {
+		t.Errorf("body has status_url: %+v", got.body)
+	}
+}
+
+func TestRepoSetStatusURLNeedsFlyApp(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, repoShowBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	args := []string{"repo", "set", "colette-api", "--platform", "render", "--status-url", "https://app.test/status"}
+	if code := cli.Run(args, h.deps); code == 0 {
+		t.Errorf("code = %d", code)
+	}
+	if h.errb.String() != usageRepoSet {
+		t.Errorf("stderr = %q", h.errb)
+	}
+	if got.calls != 0 {
+		t.Errorf("the server was called: %+v", got)
+	}
+}
+
+func TestRepoSetShowsAStatusURLRefusal(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 422, `{"errors":[{"path":"status_url","message":"must be an https URL"}]}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	args := []string{"repo", "set", "colette-api", "--fly-app", "colette-api-prod", "--status-url", "http://app.test"}
+	if code := cli.Run(args, h.deps); code != 1 || h.errb.String() != "status_url: must be an https URL\n" {
+		t.Errorf("code = %d, stderr = %q", code, h.errb)
+	}
+}
+
+func TestRepoShowPrintsTheStatusURL(t *testing.T) {
+	for name, tc := range map[string]struct{ fields, want string }{
+		"live":         {`"status_url":"https://app.test/status","live":"live","not_live_since":null`, "Status URL https://app.test/status: live"},
+		"not live":     {`"status_url":"https://app.test/status","live":"not_live","not_live_since":"2026-11-05T08:14:00Z"`, "Status URL https://app.test/status: not live since Nov 5, 08:14"},
+		"not checked":  {`"status_url":"https://app.test/status","live":"not_checked","not_live_since":null`, "Status URL https://app.test/status: not checked yet"},
+		"no URL, live": {`"status_url":null,"live":"live","not_live_since":null`, "Status: live"},
+		"no URL, down": {`"status_url":null,"live":"not_live","not_live_since":"2026-11-05T08:14:00Z"`, "Status: not live since Nov 5, 08:14"},
+	} {
+		var got linkRequest
+		body := `{"name":"colette-api","github_full_name":"colette-club/colette-api","targets":[{"platform":"fly","settings":{"app":"colette-api-prod"},"tracked":true,"account":"colette",` + tc.fields + `}]}`
+		srv := linkServer(t, 200, body, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+		if code := cli.Run([]string{"repo", "show", "colette-api"}, h.deps); code != 0 {
+			t.Fatalf("%s: code = %d, stderr %q", name, code, h.errb)
+		}
+		want := "colette-api (colette-club/colette-api)\n  Fly  app colette-api-prod, org colette, no deploy seen yet\n  " + tc.want + "\n"
+		if h.out.String() != want {
+			t.Errorf("%s: stdout = %q, want %q", name, h.out, want)
+		}
+	}
+}
+
+func TestRepoShowPrintsNoStatusLineWithoutAURL(t *testing.T) {
+	for name, fields := range map[string]string{
+		"null live":   `,"status_url":null,"live":null,"not_live_since":null`,
+		"keys absent": ``,
+	} {
+		var got linkRequest
+		body := `{"name":"colette-api","github_full_name":"colette-club/colette-api","targets":[{"platform":"fly","settings":{"app":"colette-api-prod"},"tracked":true,"account":"colette"` + fields + `}]}`
+		srv := linkServer(t, 200, body, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+		if code := cli.Run([]string{"repo", "show", "colette-api"}, h.deps); code != 0 {
+			t.Fatalf("%s: code = %d, stderr %q", name, code, h.errb)
+		}
+		if want := "colette-api (colette-club/colette-api)\n  Fly  app colette-api-prod, org colette, no deploy seen yet\n"; h.out.String() != want {
+			t.Errorf("%s: stdout = %q", name, h.out)
+		}
+	}
+}
