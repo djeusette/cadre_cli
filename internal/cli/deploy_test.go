@@ -193,13 +193,23 @@ func (r *deployRig) startServer() {
 
 func (r *deployRig) git(dir string, args ...string) string {
 	r.t.Helper()
+	out, err := tryGit(dir, args...)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return out
+}
+
+// tryGit returns git's failure instead of failing the test, for a server handler: Fatal only works on the test's own
+// goroutine.
+func tryGit(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		r.t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		return "", fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, out)
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(string(out)), nil
 }
 
 func (r *deployRig) write(dir, name, content string) {
@@ -325,6 +335,9 @@ func deployedLine(sha string) string {
 
 func (r *deployRig) anotherRepo() {
 	r.git(r.clone, "remote", "set-url", "origin", filepath.Join(r.root, "colette-club", "colette-web.git"))
+}
+func (r *deployRig) originWithNoOwner() {
+	r.git(r.clone, "remote", "set-url", "origin", "https://github.com/colette-api")
 }
 func (r *deployRig) outsideGit()    { r.t.Chdir(r.t.TempDir()) }
 func (r *deployRig) noOrigin()      { r.git(r.clone, "remote", "remove", "origin") }
@@ -655,6 +668,7 @@ func TestDeployRefuses(t *testing.T) {
 		want  string
 	}{
 		{"a clone of another repo", (*deployRig).anotherRepo, refusedCheckout},
+		{"an origin with a host and no owner", (*deployRig).originWithNoOwner, refusedCheckout},
 		{"a folder outside git", (*deployRig).outsideGit, refusedCheckout},
 		{"a clone with no origin", (*deployRig).noOrigin, refusedCheckout},
 		{"another branch", (*deployRig).anotherBranch, refusedBranch},
@@ -790,6 +804,14 @@ func TestDeployWhenGitFails(t *testing.T) {
 	}
 }
 
+func TestDeployWhenGitFailsOnAStoredConfig(t *testing.T) {
+	r := newDeployRig(t)
+	r.storedConfig("fly.toml")
+	t.Setenv("PATH", r.gitFailing("ls-files --full-name -- :(literal)fly.toml"))
+
+	r.assertRefused(r.deploy(), "git broke\n")
+}
+
 // git missing is not "this folder isn't a checkout": the error is printed as it is.
 func TestDeployWithoutGit(t *testing.T) {
 	r := newDeployRig(t)
@@ -812,6 +834,16 @@ func TestDeployWithoutFly(t *testing.T) {
 
 func TestDeployWhenFlyIsNotSignedIn(t *testing.T) {
 	r := newDeployRig(t)
+	r.flySignedOut()
+
+	r.assertRefused(r.deploy(), refusedSignIn)
+}
+
+// A signed-out flyctl stops the deploy: it never falls through to a fly that would run.
+func TestDeployWhenFlyctlIsNotSignedIn(t *testing.T) {
+	r := newDeployRig(t)
+	r.installFly("fly", "#!/bin/sh\necho \"$*\" >> \"$FAKE_FLY_LOG\"\n")
+	r.installFly("flyctl", fakeFly)
 	r.flySignedOut()
 
 	r.assertRefused(r.deploy(), refusedSignIn)
@@ -842,6 +874,7 @@ func TestDeployAsksAboutOpenItems(t *testing.T) {
 		afterQuestion string // a read that fails or ends leaves the question's line open, so cadre ends it
 	}{
 		{"no", strings.NewReader("n\n"), ""},
+		{"no, with a yes on the next line", strings.NewReader("n\ny\n"), ""},
 		{"a bare return", strings.NewReader("\n"), ""},
 		{"something else", strings.NewReader("yep\n"), ""},
 		{"an empty stdin", strings.NewReader(""), "\n"},
@@ -987,13 +1020,23 @@ func TestDeployRechecksWithoutAQuestion(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newDeployRig(t)
+			committed := make(chan error, 1)
 			r.next = func(w http.ResponseWriter) {
-				r.localCommit()
+				_, err := tryGit(r.clone, "commit", "--allow-empty", "-m", "local")
+				committed <- err
 				writeJSON(w, 200, `{"repo":"colette-api","before_deploying":`+tc.items+`}`)
 			}
 
 			code := r.deploy(tc.flags...)
 
+			select {
+			case err := <-committed:
+				if err != nil {
+					t.Fatal(err)
+				}
+			default:
+				t.Fatal("Cadre was never asked what is open")
+			}
 			if code != 1 || r.h.errb.String() != refusedMain {
 				t.Errorf("code = %d, stderr %q, want %q", code, r.h.errb, refusedMain)
 			}
