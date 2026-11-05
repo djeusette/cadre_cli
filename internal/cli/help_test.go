@@ -204,6 +204,26 @@ func TestDeployConfigIsDocumentedInStep(t *testing.T) {
 	}
 }
 
+// The help and the README both name the status line repo show prints.
+func TestRepoShowStatusLineIsDocumented(t *testing.T) {
+	srv, _ := helpServer(t)
+	h := newHarness(t, srv, nil)
+	if code := cli.Run([]string{"help", "repo", "show"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := "A line under the target gives its status URL, if it has one, and whether the app is live: live, not live since when, or not checked yet"
+	for name, text := range map[string]string{"help": h.out.String(), "README": string(readme)} {
+		if !strings.Contains(strings.Join(strings.Fields(text), " "), want) {
+			t.Errorf("%s doesn't say %q", name, want)
+		}
+	}
+}
+
 func TestHelpNeedsNoConfig(t *testing.T) {
 	srv, _ := helpServer(t)
 	h := newHarness(t, srv, nil)

@@ -205,7 +205,9 @@ time. Fly apps are found through the orgs connected with cadre fly org add.`,
 				summary: "List a repo's deploy targets and last deploys",
 				forms:   []string{"<repo>"},
 				about: `Prints each target's platform, the Fly org it is read through, whether cadre can
-track it, and its last deploy: the date in UTC and the commit.`,
+track it, and its last deploy: the date in UTC and the commit. A line under the
+target gives its status URL, if it has one, and whether the app is live: live,
+not live since when, or not checked yet.`,
 				flags:    []helpRow{jsonFlag},
 				examples: []string{"cadre repo show shop-api"},
 			},

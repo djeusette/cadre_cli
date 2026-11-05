@@ -37,6 +37,7 @@ type deployment struct {
 	checkout   git.Checkout
 	commit     string         // the full commit main and origin/main agree on
 	settings   map[string]any // the fly target's
+	statusURL  string         // the fly target's, or empty
 	app        string
 	config     string
 	fly        string // the path to flyctl or fly
@@ -161,6 +162,7 @@ func findApp(_ context.Context, d *deployment) error {
 	targets := d.repository.Targets
 	if i := slices.IndexFunc(targets, func(t api.Target) bool { return t.Platform == "fly" }); i >= 0 {
 		d.settings = targets[i].Settings
+		d.statusURL = targets[i].StatusURL
 	}
 	app, _ := d.settings["app"].(string)
 	if app == "" {
@@ -214,8 +216,17 @@ func (d *deployment) useConfig(file string) error {
 }
 
 func (d *deployment) noConfig(missing string) error {
-	return fmt.Errorf("%s in this checkout. Set the right file with cadre repo set %s --fly-app %s --fly-config <file>.",
-		missing, d.repository.Name, d.app)
+	return fmt.Errorf("%s in this checkout. Set the right file with cadre repo set %s --fly-app %s%s --fly-config <file>.",
+		missing, d.repository.Name, d.app, d.statusURLFlag())
+}
+
+// statusURLFlag is what keeps the target's status URL when the person runs repo set, which replaces the target. It goes
+// before --fly-config, as the sentence's full stop would stick to a URL at the end of a pasted command.
+func (d *deployment) statusURLFlag() string {
+	if d.statusURL == "" {
+		return ""
+	}
+	return " --status-url " + oneLine(d.statusURL)
 }
 
 // inCheckout reports whether file, relative to the top level, is a file on disk, following links. A folder, or a link
