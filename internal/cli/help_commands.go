@@ -225,6 +225,33 @@ its token.`,
 				flags:    []helpRow{jsonFlag},
 				examples: []string{"cadre fly org remove acme"},
 			},
+			{
+				name:    "deploy",
+				summary: "Deploy a repo to its Fly app, from a checkout of it",
+				forms:   []string{"<repo> [--yes]"},
+				about: `<repo> is the repo's name in Cadre, such as shop-api. Run it anywhere in a
+checkout of that repo. cadre runs fly deploy at the checkout's top level, with
+the commit as the image label, so Cadre can tie the deploy to it.
+
+It refuses unless the checkout is on main, has no uncommitted changes or
+untracked files, and main equals origin/main after a git fetch. The repo needs a
+Fly app, set with cadre repo set, and fly must be installed and signed in.
+
+The config file is the one set with --fly-config, else fly.production.toml if
+the checkout has one, else fly.toml.
+
+Open Before deploying items are listed, and cadre asks before going on. With no
+terminal to answer on, the answer is no. If Cadre can't say what is open,
+nothing deploys.`,
+				flags: []helpRow{
+					{"--yes", "Go on despite open Before deploying items"},
+					{"--json", "Print what was deployed as JSON, with fly's output on stderr"},
+				},
+				examples: []string{
+					"cadre deploy shop-api",
+					"cadre deploy shop-api --yes",
+				},
+			},
 		},
 	},
 	{

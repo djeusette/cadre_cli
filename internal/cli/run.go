@@ -49,6 +49,8 @@ func Run(args []string, env Env) int {
 		return runRepo(env, asJSON, args[1:])
 	case "fly":
 		return runFly(env, asJSON, args[1:])
+	case "deploy":
+		return runDeploy(env, asJSON, args[1:])
 	case "upgrade":
 		return runUpgrade(env, asJSON, args[1:])
 	default:

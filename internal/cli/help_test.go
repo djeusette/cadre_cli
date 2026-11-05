@@ -28,6 +28,7 @@ const (
 	usageRepoSet          = "Usage: cadre repo set <repo> --fly-app <app> [--fly-config <file>]\n       cadre repo set <repo> --platform <name>\nRun cadre help repo set for details.\n"
 	usageRepoUnset        = "Usage: cadre repo unset <repo> --platform <name>\nRun cadre help repo unset for details.\n"
 	usageRepoShow         = "Usage: cadre repo show <repo>\nRun cadre help repo show for details.\n"
+	usageDeploy           = "Usage: cadre deploy <repo> [--yes]\nRun cadre help deploy for details.\n"
 	usageFlyOrgAdd        = "Usage: cadre fly org add <org>\nRun cadre help fly org add for details.\n"
 	usageFlyOrgRemove     = "Usage: cadre fly org remove <org>\nRun cadre help fly org remove for details.\n"
 	usageUpgrade          = "Usage: cadre upgrade\nRun cadre help upgrade for details.\n"
@@ -39,7 +40,7 @@ var (
 		"login", "whoami",
 		"project create", "project pull", "project update", "project archive", "project unarchive",
 		"spec pull", "spec push", "pr link", "repo set", "repo unset", "repo show",
-		"fly org add", "fly org remove", "upgrade", "version", "help",
+		"fly org add", "fly org remove", "deploy", "upgrade", "version", "help",
 	}
 	everyGroup = map[string][]string{
 		"project": {"create", "pull", "update", "archive", "unarchive"},
@@ -151,6 +152,8 @@ func TestHelpFlagNeverRunsTheCommand(t *testing.T) {
 		{"spec", "pull", "-h", "wish-reminders/2"},
 		{"pr", "link", prURL, "--none", "--help"},
 		{"repo", "show", "--help"},
+		{"deploy", "--help"},
+		{"deploy", "colette-api", "--yes", "-h"},
 		{"repo", "set", "shop-api", "--fly-app", "shop-api-prod", "-h"},
 		{"fly", "org", "add", "--help"},
 		{"fly", "org", "remove", "acme", "-h"},
@@ -203,10 +206,10 @@ func TestUnknownCommand(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"deploy"}, "cadre has no deploy command.\nRun cadre help to see its commands.\n"},
-		{[]string{"deploy", "shop-api", "--yes"}, "cadre has no deploy command.\nRun cadre help to see its commands.\n"},
-		{[]string{"deploy", "--help"}, "cadre has no deploy command.\nRun cadre help to see its commands.\n"},
-		{[]string{"help", "deploy"}, "cadre has no deploy command.\nRun cadre help to see its commands.\n"},
+		{[]string{"rollback"}, "cadre has no rollback command.\nRun cadre help to see its commands.\n"},
+		{[]string{"rollback", "shop-api", "--yes"}, "cadre has no rollback command.\nRun cadre help to see its commands.\n"},
+		{[]string{"rollback", "--help"}, "cadre has no rollback command.\nRun cadre help to see its commands.\n"},
+		{[]string{"help", "rollback"}, "cadre has no rollback command.\nRun cadre help to see its commands.\n"},
 		{[]string{"--nope"}, "cadre has no --nope command.\nRun cadre help to see its commands.\n"},
 		{[]string{"projct"}, "cadre has no projct command.\nDid you mean cadre project?\nRun cadre help to see its commands.\n"},
 		{[]string{"upgrde"}, "cadre has no upgrde command.\nDid you mean cadre upgrade?\nRun cadre help to see its commands.\n"},
@@ -253,6 +256,8 @@ func TestWrongArgumentsPrintThatCommandsUsage(t *testing.T) {
 		{[]string{"repo", "set"}, usageRepoSet},
 		{[]string{"repo", "unset"}, usageRepoUnset},
 		{[]string{"repo", "show"}, usageRepoShow},
+		{[]string{"deploy"}, usageDeploy},
+		{[]string{"deploy", "colette-api", "shop-api"}, usageDeploy},
 		{[]string{"fly", "org", "add"}, usageFlyOrgAdd},
 		{[]string{"fly", "org", "remove"}, usageFlyOrgRemove},
 		{[]string{"upgrade", "now"}, usageUpgrade},
