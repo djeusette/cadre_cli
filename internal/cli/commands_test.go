@@ -2371,6 +2371,21 @@ const vercelTargetBody = `{"repo":"colette-agents","platform":"vercel","name":"l
 
 var vercelSet = []string{"repo", "set", "colette-agents", "--vercel-project", "prj_1", "--name", "linear", "--vercel-dir", "apps/linear"}
 
+func TestRepoSetVercelAtTheRepoRoot(t *testing.T) {
+	body := strings.Replace(vercelTargetBody, `"dir":"apps/linear"`, `"dir":"."`, 1)
+	var got linkRequest
+	srv := linkServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	args := []string{"repo", "set", "colette-agents", "--vercel-project", "prj_1", "--name", "linear", "--vercel-dir", "."}
+	if code := cli.Run(args, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Connected colette-agents to the Vercel project prj_1 as linear, in the colette-club team. It deploys from the repo's root.\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+}
+
 func TestRepoSetVercel(t *testing.T) {
 	var got linkRequest
 	srv := linkServer(t, 200, vercelTargetBody, &got)
