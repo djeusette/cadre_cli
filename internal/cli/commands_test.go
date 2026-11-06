@@ -1338,6 +1338,7 @@ func TestProjectUsage(t *testing.T) {
 type linkRequest struct {
 	calls              int
 	method, path, auth string
+	query              string
 	body               map[string]any
 }
 
@@ -1346,7 +1347,7 @@ func linkServer(t *testing.T, status int, body string, got *linkRequest) *httpte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		got.calls++
-		got.method, got.path, got.auth = r.Method, r.URL.EscapedPath(), r.Header.Get("Authorization")
+		got.method, got.path, got.auth, got.query = r.Method, r.URL.EscapedPath(), r.Header.Get("Authorization"), r.URL.RawQuery
 		if err := json.Unmarshal(b, &got.body); len(b) > 0 && err != nil {
 			t.Errorf("body %q: %v", b, err)
 		}
@@ -2227,5 +2228,352 @@ func TestRepoShowPrintsAStatusURLOnOneLine(t *testing.T) {
 	}
 	if strings.ContainsRune(h.out.String(), '\x1b') {
 		t.Errorf("stdout has an escape: %q", h.out)
+	}
+}
+
+const vercelAddedBody = `{"platform":"vercel","name":"colette-club","apps":5}`
+
+func TestVercelTeamAdd(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 200, vercelAddedBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	h.pipe("  vercel_secret_token \n")
+
+	if code := cli.Run([]string{"vercel", "team", "add", "colette-club"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Connected the Vercel team colette-club: its token reads 5 apps.\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+	if got.method != "PUT" || got.path != "/api/platforms/vercel/accounts/colette-club" || got.auth != "Bearer cadre_abc" || got.raw != `{"token":"vercel_secret_token"}` {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestVercelTeamAddAsksOnATerminal(t *testing.T) {
+	var got flyRequest
+	asked := 0
+	srv := flyServer(t, 200, vercelAddedBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	h.terminal("typed_token", nil, &asked)
+
+	if code := cli.Run([]string{"vercel", "team", "add", "colette-club"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if h.errb.String() != "Token for colette-club: " || asked != 1 || got.raw != `{"token":"typed_token"}` {
+		t.Errorf("stderr = %q, asked %d, request %+v", h.errb, asked, got)
+	}
+}
+
+func TestVercelTeamAddJSON(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 200, vercelAddedBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	h.pipe("tok")
+
+	if code := cli.Run([]string{"vercel", "team", "add", "colette-club", "--json"}, h.deps); code != 0 || h.out.String() != vercelAddedBody {
+		t.Errorf("code = %d, stdout = %q, stderr %q", code, h.out, h.errb)
+	}
+}
+
+func TestVercelTeamAddWithoutATokenSendsNothing(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 200, vercelAddedBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	h.pipe(" \n")
+
+	if code := cli.Run([]string{"vercel", "team", "add", "colette-club"}, h.deps); code != 1 {
+		t.Errorf("code = %d", code)
+	}
+	if h.errb.String() != "No token given. Pipe it in, or type it when asked.\n" || got.calls != 0 {
+		t.Errorf("stderr = %q, request %+v", h.errb, got)
+	}
+}
+
+func TestVercelTeamRemove(t *testing.T) {
+	var got flyRequest
+	const body = `{"platform":"vercel","name":"acme"}`
+	srv := flyServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"vercel", "team", "remove", "acme"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Removed the Vercel team acme.\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+	if got.method != "DELETE" || got.path != "/api/platforms/vercel/accounts/acme" || got.auth != "Bearer cadre_abc" {
+		t.Errorf("request = %+v", got)
+	}
+	h = newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	if code := cli.Run([]string{"vercel", "team", "remove", "acme", "--json"}, h.deps); code != 0 || h.out.String() != body {
+		t.Errorf("json: code = %d, stdout = %q", code, h.out)
+	}
+}
+
+func TestVercelTeamErrors(t *testing.T) {
+	add := []string{"vercel", "team", "add", "acme"}
+	remove := []string{"vercel", "team", "remove", "acme"}
+	cases := []struct {
+		args   []string
+		status int
+		body   string
+		want   func(server string) string
+	}{
+		{add, 422, `{"error":"token_refused"}`, func(string) string { return "Vercel refused this token for acme.\n" }},
+		{add, 422, `{"error":"org_not_found"}`, func(string) string { return "Vercel has no team acme that this token can read.\n" }},
+		{add, 502, `{"error":"platform_unreachable","platform":"vercel"}`, func(string) string { return "Cadre couldn't reach Vercel. Try again in a minute.\n" }},
+		{add, 404, `{"error":"platform_not_found"}`, func(server string) string { return "Vercel isn't a platform on " + server + ".\n" }},
+		{remove, 404, `{"error":"account_not_found"}`, func(server string) string { return "No Vercel team acme on " + server + ".\n" }},
+		{remove, 409, `{"error":"account_in_use","repos":["colette-agents"]}`, func(string) string {
+			return "acme still reads colette-agents. Unset or move those targets first.\n"
+		}},
+	}
+	for _, tc := range cases {
+		var got flyRequest
+		srv := flyServer(t, tc.status, tc.body, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		h.pipe("vercel_secret_token")
+
+		if code := cli.Run(tc.args, h.deps); code != 1 {
+			t.Errorf("%q %d %s: code = %d", tc.args, tc.status, tc.body, code)
+		}
+		if want := tc.want(srv.URL); h.errb.String() != want {
+			t.Errorf("%q %d %s: stderr = %q, want %q", tc.args, tc.status, tc.body, h.errb, want)
+		}
+	}
+}
+
+func TestVercelTeamUsage(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 200, vercelAddedBody, &got)
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"vercel", "team", "add"}, usageVercelTeamAdd},
+		{[]string{"vercel", "team", "add", "acme", "extra"}, usageVercelTeamAdd},
+		{[]string{"vercel", "team", "remove"}, usageVercelTeamRemove},
+		{[]string{"vercel", "team", "remove", "acme", "extra"}, usageVercelTeamRemove},
+	} {
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		h.pipe("tok")
+		if code := cli.Run(c.args, h.deps); code != 2 || h.errb.String() != c.want {
+			t.Errorf("%q: code = %d, stderr %q", c.args, code, h.errb)
+		}
+	}
+	if got.calls != 0 {
+		t.Errorf("the server was called: %+v", got)
+	}
+}
+
+const vercelTargetBody = `{"repo":"colette-agents","platform":"vercel","name":"linear","settings":{"dir":"apps/linear","project":"prj_1"},"account":"colette-club","tracked":true,"status_url":null,"live":null,"not_live_since":null}`
+
+var vercelSet = []string{"repo", "set", "colette-agents", "--vercel-project", "prj_1", "--name", "linear", "--vercel-dir", "apps/linear"}
+
+func TestRepoSetVercel(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, vercelTargetBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run(vercelSet, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Connected colette-agents to the Vercel project prj_1 as linear, in the colette-club team. It deploys from apps/linear.\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+	settings, _ := got.body["settings"].(map[string]any)
+	if got.method != "PUT" || got.path != "/api/repositories/colette-agents/targets/vercel" || got.auth != "Bearer cadre_abc" ||
+		len(got.body) != 2 || got.body["name"] != "linear" || len(settings) != 2 || settings["project"] != "prj_1" || settings["dir"] != "apps/linear" {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestRepoSetVercelWithoutAnAccount(t *testing.T) {
+	var got linkRequest
+	body := `{"repo":"colette-agents","platform":"vercel","name":"linear","settings":{"dir":"apps/linear","project":"prj_1"},"account":null,"tracked":true}`
+	srv := linkServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run(vercelSet, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Connected colette-agents to the Vercel project prj_1 as linear. It deploys from apps/linear.\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+}
+
+func TestRepoSetVercelJSON(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, vercelTargetBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run(append(slices.Clone(vercelSet), "--json"), h.deps); code != 0 || h.out.String() != vercelTargetBody {
+		t.Errorf("code = %d, stdout = %q", code, h.out)
+	}
+}
+
+func TestRepoSetVercelUsage(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, vercelTargetBody, &got)
+	cases := [][]string{
+		{"repo", "set", "x", "--vercel-project", "prj_1", "--vercel-dir", "apps/linear"},
+		{"repo", "set", "x", "--vercel-project", "prj_1", "--name", "linear"},
+		{"repo", "set", "x", "--vercel-project", "prj_1"},
+		{"repo", "set", "x", "--name", "linear"},
+		{"repo", "set", "x", "--vercel-dir", "apps/linear"},
+		{"repo", "set", "x", "--name", "linear", "--vercel-dir", "apps/linear"},
+		{"repo", "set", "x", "--vercel-project"},
+		{"repo", "set", "x", "--fly-app", "a", "--name", "linear"},
+		{"repo", "set", "x", "--platform", "render", "--vercel-dir", "apps/linear"},
+		append(slices.Clone(vercelSet), "--fly-app", "x"),
+		append(slices.Clone(vercelSet), "--platform", "render"),
+		append(slices.Clone(vercelSet), "--status-url", "https://app.test/up"),
+		append(slices.Clone(vercelSet), "--fly-config", "fly.toml"),
+	}
+	for _, args := range cases {
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != usageRepoSet {
+			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
+		}
+	}
+	if got.calls != 0 {
+		t.Errorf("the server was called: %+v", got)
+	}
+}
+
+func TestRepoSetPlatformVercelPointsToItsFlags(t *testing.T) {
+	for _, platform := range []string{"vercel", "Vercel", "VERCEL"} {
+		var got linkRequest
+		srv := linkServer(t, 200, vercelTargetBody, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+		if code := cli.Run([]string{"repo", "set", "x", "--platform", platform}, h.deps); code != 1 {
+			t.Errorf("%s: code = %d", platform, code)
+		}
+		if want := "Vercel has its own flags: cadre repo set x --vercel-project <id> --name <app> --vercel-dir <folder>.\n"; h.errb.String() != want {
+			t.Errorf("%s: stderr = %q", platform, h.errb)
+		}
+		if got.calls != 0 {
+			t.Errorf("%s: the server was called: %+v", platform, got)
+		}
+	}
+}
+
+func TestRepoSetVercelNotConnected(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 503, `{"error":"platform_not_connected","platform":"vercel"}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run(vercelSet, h.deps); code != 1 {
+		t.Errorf("code = %d", code)
+	}
+	if want := "Vercel isn't connected on " + srv.URL + " yet. Add a team with cadre vercel team add <team>.\n"; h.errb.String() != want {
+		t.Errorf("stderr = %q, want %q", h.errb, want)
+	}
+}
+
+func TestRepoUnsetVercel(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, `{"repo":"colette-agents","platform":"vercel"}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "unset", "colette-agents", "--platform", "vercel", "--name", "linear"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Removed colette-agents's Vercel target linear.\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+	if got.method != "DELETE" || got.path != "/api/repositories/colette-agents/targets/vercel" || got.query != "name=linear" {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestRepoUnsetVercelNotFound(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 404, `{"error":"target_not_found"}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "unset", "colette-agents", "--platform", "vercel", "--name", "linear"}, h.deps); code != 1 {
+		t.Errorf("code = %d", code)
+	}
+	if want := "colette-agents has no Vercel target linear.\n"; h.errb.String() != want {
+		t.Errorf("stderr = %q", h.errb)
+	}
+}
+
+func TestRepoUnsetWithoutANameKeepsItsLine(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, `{"repo":"colette-site","platform":"render"}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "unset", "colette-site", "--platform", "render"}, h.deps); code != 0 || got.query != "" {
+		t.Errorf("code = %d, request %+v", code, got)
+	}
+}
+
+func TestRepoShowVercelTargets(t *testing.T) {
+	var got linkRequest
+	body := `{"name":"colette-agents","github_full_name":"colette-club/colette-agents","targets":[` +
+		`{"platform":"fly","name":null,"settings":{"app":"colette-agents-prod"},"tracked":true,"account":"colette"},` +
+		`{"platform":"vercel","name":"linear","settings":{"project":"prj_1","dir":"apps/linear"},"tracked":true,"account":"colette-club","last_deploy":{"commit":"0d97f55aa11bb22cc33dd44ee55ff66aa77bb88c","deployed_at":"2026-11-05T09:00:00Z"}},` +
+		`{"platform":"vercel","name":"docs","settings":{"project":"prj_2","dir":"apps/docs"},"tracked":true,"account":"colette-club","last_deploy":null}]}`
+	srv := linkServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "show", "colette-agents"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	want := "colette-agents (colette-club/colette-agents)\n" +
+		"  Fly     app colette-agents-prod, org colette, no deploy seen yet\n" +
+		"  Vercel  linear, dir apps/linear, project prj_1, team colette-club, last deploy Nov 5 (0d97f55)\n" +
+		"  Vercel  docs, dir apps/docs, project prj_2, team colette-club, no deploy seen yet\n"
+	if h.out.String() != want {
+		t.Errorf("stdout = %q\nwant %q", h.out, want)
+	}
+}
+
+func TestRepoPrintsNoEscapesFromAVercelTarget(t *testing.T) {
+	const evil = `li\u001b[2Jnear\nFake: line`
+	set := `{"repo":"colette-agents","platform":"vercel","name":"` + evil + `","settings":{"dir":"` + evil + `","project":"` + evil + `"},"account":"` + evil + `","tracked":true}`
+	show := `{"name":"colette-agents","github_full_name":"colette-club/colette-agents","targets":[{"platform":"vercel","name":"` + evil + `","settings":{"dir":"` + evil + `","pr\u001boject":"` + evil + `"},"tracked":true,"account":"` + evil + `"}]}`
+	for name, tc := range map[string]struct {
+		args []string
+		body string
+	}{"set": {vercelSet, set}, "show": {[]string{"repo", "show", "colette-agents"}, show}} {
+		var got linkRequest
+		srv := linkServer(t, 200, tc.body, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+		if code := cli.Run(tc.args, h.deps); code != 0 {
+			t.Fatalf("%s: code = %d, stderr %q", name, code, h.errb)
+		}
+		if strings.ContainsRune(h.out.String(), '\x1b') || strings.Contains(h.out.String(), "\nFake") {
+			t.Errorf("%s: stdout has a control character: %q", name, h.out)
+		}
+	}
+}
+
+func TestRepoSetVercelWithoutDirOrProjectPrintsNoNil(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, `{"repo":"colette-agents","platform":"vercel","name":"linear","settings":{},"account":null,"tracked":true}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run(vercelSet, h.deps); code != 0 || strings.Contains(h.out.String(), "nil") || strings.Contains(h.out.String(), "deploys from") {
+		t.Errorf("code = %d, stdout = %q", code, h.out)
+	}
+}
+
+func TestRepoUnsetVercelNeedsAName(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, `{}`, &got)
+	for _, p := range []string{"vercel", "Vercel", "VERCEL"} {
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		if code := cli.Run([]string{"repo", "unset", "colette-agents", "--platform", p}, h.deps); code != 2 || h.errb.String() != usageRepoUnset {
+			t.Errorf("%s: code = %d, stderr %q", p, code, h.errb)
+		}
+	}
+	if got.calls != 0 {
+		t.Errorf("the server was called: %+v", got)
 	}
 }

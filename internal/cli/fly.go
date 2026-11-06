@@ -31,23 +31,25 @@ func runFly(env Env, asJSON bool, args []string) int {
 	switch args[1] {
 	case "add":
 		return runCommand(env, asJSON, "fly org add", rest, 1, func(ctx context.Context, s *session, a []string) int {
-			return addFlyOrg(ctx, s, a[0])
+			return addAccount(ctx, s, "fly", "org", a[0])
 		})
 	case "remove":
 		return runCommand(env, asJSON, "fly org remove", rest, 1, func(ctx context.Context, s *session, a []string) int {
-			return removeFlyOrg(ctx, s, a[0])
+			return removeAccount(ctx, s, "fly", "org", a[0])
 		})
 	default:
 		return unknownCommand(env, "fly org", args[1])
 	}
 }
 
-func addFlyOrg(ctx context.Context, s *session, org string) int {
+// addAccount connects the platform's account name with a token read from stdin or the terminal. noun is what the
+// platform calls the account: org or team.
+func addAccount(ctx context.Context, s *session, platform, noun, name string) int {
 	if !s.requireKey() {
 		return 1
 	}
 
-	token, err := s.readToken(org)
+	token, err := s.readToken(name)
 	if err != nil {
 		fmt.Fprintf(s.env.Stderr, "Could not read the token: %v\n", err)
 		return 1
@@ -57,34 +59,34 @@ func addFlyOrg(ctx context.Context, s *session, org string) int {
 		return 1
 	}
 
-	added, err := s.client.AddAccount(ctx, "fly", org, token)
+	added, err := s.client.AddAccount(ctx, platform, name, token)
 	if err != nil {
-		return s.flyFailure(err, org)
+		return s.accountFailure(err, platform, noun, name)
 	}
 
 	if s.asJSON {
 		fmt.Fprint(s.env.Stdout, string(added.Raw))
 		return 0
 	}
-	fmt.Fprintf(s.env.Stdout, "Connected the Fly org %s: its token reads %s.\n", added.Name, apps(added.Apps))
+	fmt.Fprintf(s.env.Stdout, "Connected the %s %s %s: its token reads %s.\n", displayName(platform), noun, added.Name, apps(added.Apps))
 	return 0
 }
 
-func removeFlyOrg(ctx context.Context, s *session, org string) int {
+func removeAccount(ctx context.Context, s *session, platform, noun, name string) int {
 	if !s.requireKey() {
 		return 1
 	}
 
-	removed, err := s.client.RemoveAccount(ctx, "fly", org)
+	removed, err := s.client.RemoveAccount(ctx, platform, name)
 	if err != nil {
-		return s.flyFailure(err, org)
+		return s.accountFailure(err, platform, noun, name)
 	}
 
 	if s.asJSON {
 		fmt.Fprint(s.env.Stdout, string(removed.Raw))
 		return 0
 	}
-	fmt.Fprintf(s.env.Stdout, "Removed the Fly org %s.\n", removed.Name)
+	fmt.Fprintf(s.env.Stdout, "Removed the %s %s %s.\n", displayName(platform), noun, removed.Name)
 	return 0
 }
 
@@ -95,37 +97,38 @@ func apps(n int) string {
 	return fmt.Sprintf("%d apps", n)
 }
 
-// flyFailure prints a failed fly org call to stderr and returns exit code 1. The token is never part of it.
-func (s *session) flyFailure(err error, org string) int {
+// accountFailure prints a failed account call to stderr and returns exit code 1. The token is never part of it.
+func (s *session) accountFailure(err error, platform, noun, name string) int {
+	display := displayName(platform)
 	var inUse *api.AccountInUseError
 	switch {
 	case errors.Is(err, api.ErrTokenRefused):
-		fmt.Fprintf(s.env.Stderr, "Fly refused this token for %s.\n", org)
+		fmt.Fprintf(s.env.Stderr, "%s refused this token for %s.\n", display, name)
 	case errors.Is(err, api.ErrOrgNotFound):
-		fmt.Fprintf(s.env.Stderr, "Fly has no org %s that this token can read.\n", org)
+		fmt.Fprintf(s.env.Stderr, "%s has no %s %s that this token can read.\n", display, noun, name)
 	case errors.Is(err, api.ErrAccountNotFound):
-		fmt.Fprintf(s.env.Stderr, "No Fly org %s on %s.\n", org, s.baseURL)
+		fmt.Fprintf(s.env.Stderr, "No %s %s %s on %s.\n", display, noun, name, s.baseURL)
 	case errors.Is(err, api.ErrPlatformNotFound):
-		fmt.Fprintf(s.env.Stderr, "Fly isn't a platform on %s.\n", s.baseURL)
+		fmt.Fprintf(s.env.Stderr, "%s isn't a platform on %s.\n", display, s.baseURL)
 	case errors.Is(err, api.ErrPlatformUnreachable):
-		fmt.Fprintln(s.env.Stderr, "Cadre couldn't reach Fly. Try again in a minute.")
+		fmt.Fprintf(s.env.Stderr, "Cadre couldn't reach %s. Try again in a minute.\n", display)
 	case errors.As(err, &inUse):
-		fmt.Fprintf(s.env.Stderr, "%s still reads %s. Unset or move those targets first.\n", org, strings.Join(inUse.Repos, ", "))
+		fmt.Fprintf(s.env.Stderr, "%s still reads %s. Unset or move those targets first.\n", name, strings.Join(inUse.Repos, ", "))
 	default:
 		return s.failAPI(err)
 	}
 	return 1
 }
 
-// readToken is the token for org, trimmed. When stdin is piped it is read whole. On a terminal the person is
-// asked on stderr and the answer is read with echo off.
-func (s *session) readToken(org string) (string, error) {
+// readToken is the token for the named account, trimmed. When stdin is piped it is read whole. On a terminal the
+// person is asked on stderr and the answer is read with echo off.
+func (s *session) readToken(name string) (string, error) {
 	if !s.env.stdinIsTerminal() {
 		raw, err := io.ReadAll(s.env.stdin())
 		return strings.TrimSpace(string(raw)), err
 	}
 
-	fmt.Fprintf(s.env.Stderr, "Token for %s: ", org)
+	fmt.Fprintf(s.env.Stderr, "Token for %s: ", name)
 	read := s.env.ReadSecret
 	if read == nil {
 		read = readSecretFromTTY(s.env.Stderr)
