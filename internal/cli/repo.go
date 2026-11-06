@@ -168,11 +168,21 @@ func deploysWith(target api.Target) string {
 		}
 		return " It deploys with fly.production.toml, else fly.toml."
 	case "vercel":
-		if dir := setting(target, "dir"); dir != "" {
-			return " It deploys from " + dir + "."
-		}
+		return deploysFrom(setting(target, "dir"))
 	}
 	return ""
+}
+
+// deploysFrom is the sentence saying which folder a Vercel app deploys from, or empty when the target names none.
+func deploysFrom(dir string) string {
+	switch dir {
+	case "":
+		return ""
+	case ".":
+		return " It deploys from the repo's root."
+	default:
+		return " It deploys from " + dir + "."
+	}
 }
 
 // accountKind is what a platform calls the account that reads its apps: a team on Vercel, an org elsewhere.
