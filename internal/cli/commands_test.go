@@ -2532,3 +2532,48 @@ func TestRepoShowVercelTargets(t *testing.T) {
 		t.Errorf("stdout = %q\nwant %q", h.out, want)
 	}
 }
+
+func TestRepoPrintsNoEscapesFromAVercelTarget(t *testing.T) {
+	const evil = `li\u001b[2Jnear\nFake: line`
+	set := `{"repo":"colette-agents","platform":"vercel","name":"` + evil + `","settings":{"dir":"` + evil + `","project":"` + evil + `"},"account":"` + evil + `","tracked":true}`
+	show := `{"name":"colette-agents","github_full_name":"colette-club/colette-agents","targets":[{"platform":"vercel","name":"` + evil + `","settings":{"dir":"` + evil + `","pr\u001boject":"` + evil + `"},"tracked":true,"account":"` + evil + `"}]}`
+	for name, tc := range map[string]struct {
+		args []string
+		body string
+	}{"set": {vercelSet, set}, "show": {[]string{"repo", "show", "colette-agents"}, show}} {
+		var got linkRequest
+		srv := linkServer(t, 200, tc.body, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+		if code := cli.Run(tc.args, h.deps); code != 0 {
+			t.Fatalf("%s: code = %d, stderr %q", name, code, h.errb)
+		}
+		if strings.ContainsRune(h.out.String(), '\x1b') || strings.Contains(h.out.String(), "\nFake") {
+			t.Errorf("%s: stdout has a control character: %q", name, h.out)
+		}
+	}
+}
+
+func TestRepoSetVercelWithoutDirOrProjectPrintsNoNil(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, `{"repo":"colette-agents","platform":"vercel","name":"linear","settings":{},"account":null,"tracked":true}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run(vercelSet, h.deps); code != 0 || strings.Contains(h.out.String(), "nil") || strings.Contains(h.out.String(), "deploys from") {
+		t.Errorf("code = %d, stdout = %q", code, h.out)
+	}
+}
+
+func TestRepoUnsetVercelNeedsAName(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, `{}`, &got)
+	for _, p := range []string{"vercel", "Vercel", "VERCEL"} {
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		if code := cli.Run([]string{"repo", "unset", "colette-agents", "--platform", p}, h.deps); code != 2 || h.errb.String() != usageRepoUnset {
+			t.Errorf("%s: code = %d, stderr %q", p, code, h.errb)
+		}
+	}
+	if got.calls != 0 {
+		t.Errorf("the server was called: %+v", got)
+	}
+}

@@ -28,7 +28,7 @@ func runRepo(env Env, asJSON bool, args []string) int {
 			return usageError(env, "repo unset")
 		}
 		name, rest, ok := takeFlag(rest, "--name")
-		if !ok {
+		if !ok || (name == "" && strings.EqualFold(platform, "vercel")) {
 			return usageError(env, "repo unset")
 		}
 		return runCommand(env, asJSON, "repo unset", rest, 1, func(ctx context.Context, s *session, a []string) int {
@@ -130,31 +130,49 @@ func setTarget(ctx context.Context, s *session, repo, platform, name string, set
 // connectedLine is what set says about a tracked target: what it connected to, the account reading it if any, and
 // what it deploys with. It reads the server's answer, so a setting that didn't stick shows.
 func connectedLine(t api.Target) string {
-	what := "app " + fmt.Sprint(t.Settings["app"])
+	what := "app" + spaced(setting(t, "app"))
 	if t.Platform == "vercel" {
-		what = "project " + fmt.Sprint(t.Settings["project"]) + " as " + t.Name
+		what = "project" + spaced(setting(t, "project")) + " as" + spaced(oneLine(t.Name))
 	}
 	line := "Connected " + t.Repo + " to the " + displayName(t.Platform) + " " + what
 	if t.Account != nil {
-		line += ", in the " + *t.Account + " " + accountKind(t.Platform)
+		line += ", in the " + oneLine(*t.Account) + " " + accountKind(t.Platform)
 	}
 	return line + "." + deploysWith(t)
 }
 
+// setting is the target's setting key as one line of text, or empty when it has none.
+func setting(t api.Target, key string) string {
+	v, ok := t.Settings[key]
+	if !ok || v == nil {
+		return ""
+	}
+	return oneLine(fmt.Sprint(v))
+}
+
+// spaced is text with a space before it, or nothing when text is empty.
+func spaced(text string) string {
+	if text == "" {
+		return ""
+	}
+	return " " + text
+}
+
 // deploysWith is the sentence saying what a target deploys with: a Fly target's config file, a Vercel target's
-// folder. Other platforms have nothing to say.
+// folder. Other platforms, and a Vercel target without a folder, have nothing to say.
 func deploysWith(target api.Target) string {
 	switch target.Platform {
 	case "fly":
-		if config, _ := target.Settings["config"].(string); config != "" {
+		if config := setting(target, "config"); config != "" {
 			return " It deploys with " + config + "."
 		}
 		return " It deploys with fly.production.toml, else fly.toml."
 	case "vercel":
-		return " It deploys from " + fmt.Sprint(target.Settings["dir"]) + "."
-	default:
-		return ""
+		if dir := setting(target, "dir"); dir != "" {
+			return " It deploys from " + dir + "."
+		}
 	}
+	return ""
 }
 
 // accountKind is what a platform calls the account that reads its apps: a team on Vercel, an org elsewhere.
@@ -233,13 +251,13 @@ func targetState(t api.Target) string {
 	}
 	pairs := make([]string, 0, len(t.Settings)+3)
 	if t.Name != "" {
-		pairs = append(pairs, t.Name)
+		pairs = append(pairs, oneLine(t.Name))
 	}
 	for _, key := range slices.Sorted(maps.Keys(t.Settings)) {
-		pairs = append(pairs, key+" "+fmt.Sprint(t.Settings[key]))
+		pairs = append(pairs, oneLine(key)+" "+setting(t, key))
 	}
 	if t.Account != nil {
-		pairs = append(pairs, accountKind(t.Platform)+" "+*t.Account)
+		pairs = append(pairs, accountKind(t.Platform)+" "+oneLine(*t.Account))
 	}
 	pairs = append(pairs, lastDeployText(t.LastDeploy))
 	return strings.Join(pairs, ", ")

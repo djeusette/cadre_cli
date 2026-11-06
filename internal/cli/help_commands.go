@@ -224,9 +224,9 @@ are found through the teams connected with cadre vercel team add.`,
 				forms:   []string{"<repo>"},
 				about: `Prints each target's platform, the Fly org or Vercel team it is read through,
 whether cadre can track it, and its last deploy: the date in UTC and the commit.
-A Vercel target starts with its name. A line under the
-target gives its status URL, if it has one, and whether the app is live: live,
-not live since when, or not checked yet.`,
+A Vercel target starts with its name. A line under the target gives its status
+URL, if it has one, and whether the app is live: live, not live since when, or
+not checked yet.`,
 				flags:    []helpRow{jsonFlag},
 				examples: []string{"cadre repo show shop-api"},
 			},
@@ -257,7 +257,7 @@ scoped to the team: the Vercel CLI can't make one. Pipe it in, or type it when
 asked, with echo off. It is never an argument, so it stays out of your shell
 history. Adding a team again replaces its token.`,
 				flags:    []helpRow{jsonFlag},
-				examples: []string{"pbpaste | cadre vercel team add colette-club"},
+				examples: []string{"cadre vercel team add colette-club"},
 			},
 			{
 				name:     "vercel team remove",
