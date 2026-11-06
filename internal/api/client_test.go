@@ -54,10 +54,10 @@ func TestEveryCallMapsTooManyRequests(t *testing.T) {
 		},
 		"show repository": func(c *api.Client) error { _, err := c.ShowRepository(ctx, "colette-api"); return err },
 		"set target": func(c *api.Client) error {
-			_, err := c.SetTarget(ctx, "colette-api", "fly", map[string]string{"app": "colette-api-prod"}, "")
+			_, err := c.SetTarget(ctx, "colette-api", "fly", "", map[string]string{"app": "colette-api-prod"}, "")
 			return err
 		},
-		"unset target":   func(c *api.Client) error { _, err := c.UnsetTarget(ctx, "colette-site", "render"); return err },
+		"unset target":   func(c *api.Client) error { _, err := c.UnsetTarget(ctx, "colette-site", "render", ""); return err },
 		"add account":    func(c *api.Client) error { _, err := c.AddAccount(ctx, "fly", "acme", "tok"); return err },
 		"remove account": func(c *api.Client) error { _, err := c.RemoveAccount(ctx, "fly", "acme"); return err },
 	}
@@ -569,7 +569,7 @@ func TestSetTarget(t *testing.T) {
 		io.WriteString(w, targetJSON)
 	})
 
-	got, err := c.SetTarget(context.Background(), "colette-api", "fly", map[string]string{"app": "colette-api-prod"}, "")
+	got, err := c.SetTarget(context.Background(), "colette-api", "fly", "", map[string]string{"app": "colette-api-prod"}, "")
 
 	if err != nil || got.Repo != "colette-api" || got.Platform != "fly" || got.Settings["app"] != "colette-api-prod" || !got.Tracked {
 		t.Fatalf("got %+v, %v", got, err)
@@ -588,7 +588,7 @@ func TestSetTargetSendsEmptySettingsAsAnObject(t *testing.T) {
 		w.WriteHeader(200)
 		io.WriteString(w, `{"repo":"colette-site","platform":"render","settings":{},"tracked":false}`)
 	})
-	if _, err := c.SetTarget(context.Background(), "colette-site", "render", nil, ""); err != nil {
+	if _, err := c.SetTarget(context.Background(), "colette-site", "render", "", nil, ""); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -613,7 +613,7 @@ func TestSetTargetStatuses(t *testing.T) {
 	}
 	for _, tc := range cases {
 		c := newClient(t, reply(tc.status, tc.body))
-		if _, err := c.SetTarget(context.Background(), "colette-api", "fly", nil, ""); !tc.check(err) {
+		if _, err := c.SetTarget(context.Background(), "colette-api", "fly", "", nil, ""); !tc.check(err) {
 			t.Errorf("%d %s: err = %v", tc.status, tc.body, err)
 		}
 	}
@@ -629,7 +629,7 @@ func TestUnsetTarget(t *testing.T) {
 		io.WriteString(w, body)
 	})
 
-	got, err := c.UnsetTarget(context.Background(), "colette-site", "render")
+	got, err := c.UnsetTarget(context.Background(), "colette-site", "render", "")
 
 	if err != nil || got.Repo != "colette-site" || got.Platform != "render" || string(got.Raw) != body {
 		t.Fatalf("got %+v, %v", got, err)
@@ -650,7 +650,7 @@ func TestUnsetTargetStatuses(t *testing.T) {
 	}
 	for _, tc := range cases {
 		c := newClient(t, reply(tc.status, tc.body))
-		if _, err := c.UnsetTarget(context.Background(), "colette-site", "render"); !tc.check(err) {
+		if _, err := c.UnsetTarget(context.Background(), "colette-site", "render", ""); !tc.check(err) {
 			t.Errorf("%d %s: err = %v", tc.status, tc.body, err)
 		}
 	}
@@ -843,9 +843,78 @@ func TestSetTargetSendsAStatusURLAndReadsItBack(t *testing.T) {
 		io.WriteString(w, `{"repo":"colette-api","platform":"fly","settings":{"app":"colette-api-prod"},"tracked":true,"status_url":"https://app.test/status","live":"not_live","not_live_since":"2026-11-05T08:14:00Z"}`)
 	})
 
-	got, err := c.SetTarget(context.Background(), "colette-api", "fly", map[string]string{"app": "colette-api-prod"}, "https://app.test/status")
+	got, err := c.SetTarget(context.Background(), "colette-api", "fly", "", map[string]string{"app": "colette-api-prod"}, "https://app.test/status")
 
 	if err != nil || got.StatusURL != "https://app.test/status" || got.Live != "not_live" || got.NotLiveSince == nil || got.NotLiveSince.UTC().Format("15:04") != "08:14" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestSetTargetSendsAVercelNameAndReadsItBack(t *testing.T) {
+	const body = `{"repo":"colette-agents","platform":"vercel","name":"linear","settings":{"dir":"apps/linear","project":"prj_1"},"account":"colette-club","tracked":true}`
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		if string(b) != `{"name":"linear","settings":{"dir":"apps/linear","project":"prj_1"}}` {
+			t.Errorf("body = %s", b)
+		}
+		if r.Method != http.MethodPut || r.URL.EscapedPath() != "/api/repositories/colette-agents/targets/vercel" {
+			t.Errorf("bad request: %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, body)
+	})
+
+	got, err := c.SetTarget(context.Background(), "colette-agents", "vercel", "linear", map[string]string{"project": "prj_1", "dir": "apps/linear"}, "")
+
+	if err != nil || got.Name != "linear" || got.Platform != "vercel" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestSetTargetLeavesTheNameOutWhenEmpty(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		if string(b) != `{"settings":{"app":"colette-api-prod"}}` {
+			t.Errorf("body = %s", b)
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, targetJSON)
+	})
+	if _, err := c.SetTarget(context.Background(), "colette-api", "fly", "", map[string]string{"app": "colette-api-prod"}, ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUnsetTargetSendsTheNameInTheQuery(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.EscapedPath() != "/api/repositories/colette-agents/targets/vercel" || r.URL.RawQuery != "name=linear+app" {
+			t.Errorf("bad request: %s %s?%s", r.Method, r.URL.EscapedPath(), r.URL.RawQuery)
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, `{"repo":"colette-agents","platform":"vercel"}`)
+	})
+	if _, err := c.UnsetTarget(context.Background(), "colette-agents", "vercel", "linear app"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUnsetTargetWithoutANameSendsNoQuery(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawQuery != "" {
+			t.Errorf("query = %q", r.URL.RawQuery)
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, `{"repo":"colette-site","platform":"render"}`)
+	})
+	if _, err := c.UnsetTarget(context.Background(), "colette-site", "render", ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestShowRepositoryReadsAVercelTargetsName(t *testing.T) {
+	c := newClient(t, reply(200, `{"name":"colette-agents","github_full_name":"colette-club/colette-agents","targets":[{"platform":"vercel","name":"linear","settings":{},"tracked":true},{"platform":"fly","name":null,"settings":{},"tracked":true}]}`))
+	got, err := c.ShowRepository(context.Background(), "colette-agents")
+	if err != nil || len(got.Targets) != 2 || got.Targets[0].Name != "linear" || got.Targets[1].Name != "" {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 }

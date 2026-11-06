@@ -491,6 +491,7 @@ type Repository struct {
 type Target struct {
 	Repo     string         `json:"repo"`
 	Platform string         `json:"platform"`
+	Name     string         `json:"name"` // the app's name on a platform that has several per repo, such as Vercel; empty on Fly
 	Settings map[string]any `json:"settings"`
 	Tracked  bool           `json:"tracked"`
 	Account  *string        `json:"account"` // the platform account that reads it, or nil
@@ -566,15 +567,19 @@ func (c *Client) NextDeploy(ctx context.Context, repo string) (NextDeploy, error
 }
 
 // SetTarget sets the repo's target on platform, replacing its settings. A non-empty statusURL is sent as the
-// top-level status_url; an empty one leaves the key out. The server reads the platform first. It
+// top-level status_url, and a non-empty name as the top-level name; an empty one leaves its key out. The server
+// reads the platform first. It
 // returns ErrRepositoryNotFound, ErrPlatformNotConnected, ErrPlatformUnreachable, ErrUnauthorized or a
 // *ValidationError when the server refuses it.
-func (c *Client) SetTarget(ctx context.Context, repo, platform string, settings map[string]string, statusURL string) (Target, error) {
+func (c *Client) SetTarget(ctx context.Context, repo, platform, name string, settings map[string]string, statusURL string) (Target, error) {
 	var target Target
 	if settings == nil {
 		settings = map[string]string{}
 	}
 	body := map[string]any{"settings": settings}
+	if name != "" {
+		body["name"] = name
+	}
 	if statusURL != "" {
 		body["status_url"] = statusURL
 	}
@@ -599,11 +604,15 @@ func (c *Client) SetTarget(ctx context.Context, repo, platform string, settings 
 	}
 }
 
-// UnsetTarget removes the repo's target on platform. It returns ErrRepositoryNotFound, ErrTargetNotFound or
-// ErrUnauthorized when the server refuses it.
-func (c *Client) UnsetTarget(ctx context.Context, repo, platform string) (Unset, error) {
+// UnsetTarget removes the repo's target on platform; a non-empty name picks one of several, as on Vercel. It
+// returns ErrRepositoryNotFound, ErrTargetNotFound or ErrUnauthorized when the server refuses it.
+func (c *Client) UnsetTarget(ctx context.Context, repo, platform, name string) (Unset, error) {
 	var removed Unset
-	status, resp, err := c.do(ctx, http.MethodDelete, targetPath(repo, platform), nil)
+	path := targetPath(repo, platform)
+	if name != "" {
+		path += "?name=" + url.QueryEscape(name)
+	}
+	status, resp, err := c.do(ctx, http.MethodDelete, path, nil)
 	if err != nil {
 		return removed, err
 	}

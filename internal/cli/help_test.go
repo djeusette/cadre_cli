@@ -26,12 +26,14 @@ const (
 	usageSpecPull         = "Usage: cadre spec pull <project>/<n> [-o <file>]\nRun cadre help spec pull for details.\n"
 	usageSpecPush         = "Usage: cadre spec push <project>/<n> <file> [--base <version>]\nRun cadre help spec push for details.\n"
 	usagePrLink           = "Usage: cadre pr link <pr-url> <project>/<n>\n       cadre pr link <pr-url> --none\nRun cadre help pr link for details.\n"
-	usageRepoSet          = "Usage: cadre repo set <repo> --fly-app <app> [--fly-config <file>] [--status-url <u>]\n       cadre repo set <repo> --platform <name>\nRun cadre help repo set for details.\n"
-	usageRepoUnset        = "Usage: cadre repo unset <repo> --platform <name>\nRun cadre help repo unset for details.\n"
+	usageRepoSet          = "Usage: cadre repo set <repo> --fly-app <app> [--fly-config <file>] [--status-url <u>]\n       cadre repo set <repo> --vercel-project <id> --name <app> --vercel-dir <folder>\n       cadre repo set <repo> --platform <name>\nRun cadre help repo set for details.\n"
+	usageRepoUnset        = "Usage: cadre repo unset <repo> --platform <name> [--name <app>]\nRun cadre help repo unset for details.\n"
 	usageRepoShow         = "Usage: cadre repo show <repo>\nRun cadre help repo show for details.\n"
 	usageDeploy           = "Usage: cadre deploy <repo> [--yes]\nRun cadre help deploy for details.\n"
 	usageFlyOrgAdd        = "Usage: cadre fly org add <org>\nRun cadre help fly org add for details.\n"
 	usageFlyOrgRemove     = "Usage: cadre fly org remove <org>\nRun cadre help fly org remove for details.\n"
+	usageVercelTeamAdd    = "Usage: cadre vercel team add <team>\nRun cadre help vercel team add for details.\n"
+	usageVercelTeamRemove = "Usage: cadre vercel team remove <team>\nRun cadre help vercel team remove for details.\n"
 	usageUpgrade          = "Usage: cadre upgrade\nRun cadre help upgrade for details.\n"
 )
 
@@ -41,15 +43,17 @@ var (
 		"login", "whoami",
 		"project create", "project pull", "project update", "project archive", "project unarchive",
 		"spec pull", "spec push", "pr link", "repo set", "repo unset", "repo show",
-		"fly org add", "fly org remove", "deploy", "upgrade", "version", "help",
+		"fly org add", "fly org remove", "vercel team add", "vercel team remove", "deploy", "upgrade", "version", "help",
 	}
 	everyGroup = map[string][]string{
-		"project": {"create", "pull", "update", "archive", "unarchive"},
-		"spec":    {"pull", "push"},
-		"pr":      {"link"},
-		"repo":    {"set", "unset", "show"},
-		"fly":     {"org add", "org remove"},
-		"fly org": {"add", "remove"},
+		"project":     {"create", "pull", "update", "archive", "unarchive"},
+		"spec":        {"pull", "push"},
+		"pr":          {"link"},
+		"repo":        {"set", "unset", "show"},
+		"fly":         {"org add", "org remove"},
+		"fly org":     {"add", "remove"},
+		"vercel":      {"team add", "team remove"},
+		"vercel team": {"add", "remove"},
 	}
 )
 
@@ -158,6 +162,8 @@ func TestHelpFlagNeverRunsTheCommand(t *testing.T) {
 		{"repo", "set", "shop-api", "--fly-app", "shop-api-prod", "-h"},
 		{"fly", "org", "add", "--help"},
 		{"fly", "org", "remove", "acme", "-h"},
+		{"vercel", "team", "add", "--help"},
+		{"vercel", "team", "remove", "acme", "-h"},
 		{"login", "--url", srv.URL, "--help"},
 		{"whoami", "--json", "--help"},
 		{"upgrade", "--help"},
@@ -224,6 +230,36 @@ func TestRepoShowStatusLineIsDocumented(t *testing.T) {
 	}
 }
 
+// The help and the README both say a Vercel token comes from the dashboard, and the repo set forms for Vercel.
+func TestVercelIsDocumentedInStep(t *testing.T) {
+	srv, _ := helpServer(t)
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	texts := map[string]string{"README": strings.ReplaceAll(string(readme), "`", "")}
+	for name, args := range map[string][]string{"team add help": {"help", "vercel", "team", "add"}, "repo set help": {"help", "repo", "set"}} {
+		h := newHarness(t, srv, nil)
+		if code := cli.Run(args, h.deps); code != 0 {
+			t.Fatalf("%s: code = %d, stderr %q", name, code, h.errb)
+		}
+		texts[name] = h.out.String()
+	}
+
+	for name, want := range map[string]string{
+		"team add help": "made in Vercel's dashboard",
+		"repo set help": "cadre repo set shop-api --vercel-project prj_1 --name site --vercel-dir web",
+		"README":        "--vercel-project <id> --name <app> --vercel-dir <folder>",
+	} {
+		if !strings.Contains(strings.Join(strings.Fields(texts[name]), " "), want) {
+			t.Errorf("%s doesn't say %q", name, want)
+		}
+	}
+	if !strings.Contains(strings.Join(strings.Fields(texts["README"]), " "), "made in Vercel's dashboard") {
+		t.Errorf("README doesn't say a Vercel token is made in the dashboard")
+	}
+}
+
 func TestHelpNeedsNoConfig(t *testing.T) {
 	srv, _ := helpServer(t)
 	h := newHarness(t, srv, nil)
@@ -263,6 +299,8 @@ func TestUnknownCommand(t *testing.T) {
 		{[]string{"pr", "unlink", prURL}, "cadre pr has no unlink command.\nDid you mean cadre pr link?\nRun cadre help pr to see its commands.\n"},
 		{[]string{"repo", "nope", "colette-api"}, "cadre repo has no nope command.\nRun cadre help repo to see its commands.\n"},
 		{[]string{"fly", "app", "add", "acme"}, "cadre fly has no app command.\nRun cadre help fly to see its commands.\n"},
+		{[]string{"vercel", "project", "add", "x"}, "cadre vercel has no project command.\nRun cadre help vercel to see its commands.\n"},
+		{[]string{"vercel", "team", "ad", "acme"}, "cadre vercel team has no ad command.\nDid you mean cadre vercel team add?\nRun cadre help vercel team to see its commands.\n"},
 		{[]string{"fly", "org", "list"}, "cadre fly org has no list command.\nRun cadre help fly org to see its commands.\n"},
 		{[]string{"fly", "org", "ad", "acme"}, "cadre fly org has no ad command.\nDid you mean cadre fly org add?\nRun cadre help fly org to see its commands.\n"},
 	} {
@@ -305,6 +343,8 @@ func TestWrongArgumentsPrintThatCommandsUsage(t *testing.T) {
 		{[]string{"deploy", "colette-api", "shop-api"}, usageDeploy},
 		{[]string{"fly", "org", "add"}, usageFlyOrgAdd},
 		{[]string{"fly", "org", "remove"}, usageFlyOrgRemove},
+		{[]string{"vercel", "team", "add"}, usageVercelTeamAdd},
+		{[]string{"vercel", "team", "remove"}, usageVercelTeamRemove},
 		{[]string{"upgrade", "now"}, usageUpgrade},
 	} {
 		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})

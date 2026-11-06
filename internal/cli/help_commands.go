@@ -14,6 +14,8 @@ var helpGroups = []groupHelp{
 	{"repo", "Say where repos deploy"},
 	{"fly", "Connect Fly orgs, so cadre can read their apps' deploys"},
 	{"fly org", "Connect Fly orgs, so cadre can read their apps' deploys"},
+	{"vercel", "Connect Vercel teams, so cadre can read their apps' deploys"},
+	{"vercel team", "Connect Vercel teams, so cadre can read their apps' deploys"},
 }
 
 // helpSections is every command, in the overview's order.
@@ -172,14 +174,25 @@ a milestone number, such as wish-reminders/2.`,
 			{
 				name:    "repo set",
 				summary: "Say where a repo deploys",
-				forms:   []string{"<repo> --fly-app <app> [--fly-config <file>] [--status-url <u>]", "<repo> --platform <name>"},
+				forms: []string{
+					"<repo> --fly-app <app> [--fly-config <file>] [--status-url <u>]",
+					"<repo> --vercel-project <id> --name <app> --vercel-dir <folder>",
+					"<repo> --platform <name>",
+				},
 				about: `<repo> is the repo's name in Cadre, such as shop-api. Setting a platform again
 replaces its settings, so pass --fly-app, --fly-config and --status-url each
-time. Fly apps are found through the orgs connected with cadre fly org add.`,
+time. Fly apps are found through the orgs connected with cadre fly org add.
+
+A repo can have several Vercel apps, one per --name. Give each its project id
+and the folder it builds from, and set it again to change it. Vercel projects
+are found through the teams connected with cadre vercel team add.`,
 				flags: []helpRow{
-					{"--fly-app <app>", "Connect the repo to this Fly app, which cadre then tracks"},
+					{"--fly-app <app>", "Connect the repo to a Fly app, which cadre then tracks"},
 					{"--fly-config <file>", "The Fly config file it deploys with, for the whole team"},
 					{"--status-url <url>", "An https URL cadre checks to tell if the app is live"},
+					{"--vercel-project <id>", "Connect the repo to a Vercel project cadre tracks"},
+					{"--name <app>", "The Vercel app's name, such as linear. Vercel only"},
+					{"--vercel-dir <folder>", "The folder the app deploys from. Vercel only"},
 					{"--platform <name>", "Name any other platform, which shows as not tracked"},
 					jsonFlag,
 				},
@@ -187,25 +200,31 @@ time. Fly apps are found through the orgs connected with cadre fly org add.`,
 					"cadre repo set shop-api --fly-app shop-api-prod",
 					"cadre repo set shop-api --fly-app shop-api-prod --fly-config fly.staging.toml",
 					"cadre repo set shop-api --fly-app shop-api --status-url https://app.test/up",
+					"cadre repo set shop-api --vercel-project prj_1 --name site --vercel-dir web",
 					"cadre repo set shop-site --platform render",
 				},
 			},
 			{
 				name:    "repo unset",
 				summary: "Remove a repo's deploy target",
-				forms:   []string{"<repo> --platform <name>"},
+				forms:   []string{"<repo> --platform <name> [--name <app>]"},
 				flags: []helpRow{
 					{"--platform <name>", "The platform to remove the target from. Required"},
+					{"--name <app>", "Which Vercel app to remove. Required for Vercel"},
 					jsonFlag,
 				},
-				examples: []string{"cadre repo unset shop-site --platform render"},
+				examples: []string{
+					"cadre repo unset shop-site --platform render",
+					"cadre repo unset shop-api --platform vercel --name site",
+				},
 			},
 			{
 				name:    "repo show",
 				summary: "List a repo's deploy targets and last deploys",
 				forms:   []string{"<repo>"},
-				about: `Prints each target's platform, the Fly org it is read through, whether cadre can
-track it, and its last deploy: the date in UTC and the commit. A line under the
+				about: `Prints each target's platform, the Fly org or Vercel team it is read through,
+whether cadre can track it, and its last deploy: the date in UTC and the commit.
+A Vercel target starts with its name. A line under the
 target gives its status URL, if it has one, and whether the app is live: live,
 not live since when, or not checked yet.`,
 				flags:    []helpRow{jsonFlag},
@@ -228,6 +247,25 @@ its token.`,
 				about:    "Refused while a repo's target still reads the org.",
 				flags:    []helpRow{jsonFlag},
 				examples: []string{"cadre fly org remove acme"},
+			},
+			{
+				name:    "vercel team add",
+				summary: "Connect a Vercel team with a token that reads it",
+				forms:   []string{"<team>"},
+				about: `A Vercel token is made in Vercel's dashboard, under Account Settings, Tokens,
+scoped to the team: the Vercel CLI can't make one. Pipe it in, or type it when
+asked, with echo off. It is never an argument, so it stays out of your shell
+history. Adding a team again replaces its token.`,
+				flags:    []helpRow{jsonFlag},
+				examples: []string{"pbpaste | cadre vercel team add colette-club"},
+			},
+			{
+				name:     "vercel team remove",
+				summary:  "Disconnect a Vercel team",
+				forms:    []string{"<team>"},
+				about:    "Refused while a repo's target still reads the team.",
+				flags:    []helpRow{jsonFlag},
+				examples: []string{"cadre vercel team remove colette-club"},
 			},
 			{
 				name:    "deploy",
