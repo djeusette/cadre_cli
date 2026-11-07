@@ -32,6 +32,7 @@ func (s *session) buildThenPromote(ctx context.Context, v *vercelDeployment) int
 		builds[i] = v.call(ctx, app, "deploy", "--prod", "--skip-domain", "--yes", "--non-interactive", "--json",
 			"--project", app.project, "--scope", app.team)
 	}
+	fmt.Fprintf(s.progress(), "Building %s for %s.\n", v.commit[:7], appNames(v.apps))
 	w.run(builds...)
 	if w.signalled() {
 		fmt.Fprintln(s.env.Stderr, msgNotDeployed)
@@ -50,6 +51,7 @@ func (s *session) buildThenPromote(ctx context.Context, v *vercelDeployment) int
 		fmt.Fprintln(s.env.Stderr, msgNotDeployed)
 		return 1
 	}
+	fmt.Fprintf(s.progress(), "Promoting %s.\n", appNames(v.apps))
 	if !s.promoteAll(ctx, v, urls, w) {
 		return 1
 	}

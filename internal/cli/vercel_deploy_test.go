@@ -279,6 +279,17 @@ func vercelDeployedLine(sha string, apps string) string {
 	return "Deployed " + sha[:7] + " to " + apps + ". Cadre shows each on its next check.\n"
 }
 
+func buildingLine(sha string, apps string) string {
+	return "Building " + sha[:7] + " for " + apps + ".\n"
+}
+
+func promotingLine(apps string) string { return "Promoting " + apps + ".\n" }
+
+// vercelDeployedOutput is the progress of a deploy that went live: the builds, the promotions, then where it went.
+func vercelDeployedOutput(sha string, apps string) string {
+	return buildingLine(sha, apps) + promotingLine(apps) + vercelDeployedLine(sha, apps)
+}
+
 // pushedElsewhere commits on a new branch from HEAD, pushes it, and comes back, so the checkout knows a commit HEAD
 // doesn't contain. It returns that commit.
 func (r *vercelRig) pushedElsewhere(branch string) string {
@@ -318,8 +329,8 @@ func TestVercelDeployBuildsEveryAppThenPromotes(t *testing.T) {
 	if want := []string{promoteCall(admin, "admin", "colette-ops"), promoteCall(web, "web", "colette-club")}; !slices.Equal(calls[4:], want) {
 		t.Errorf("promotions = %q, want %q", calls[4:], want)
 	}
-	if r.h.out.String() != vercelDeployedLine(sha, "admin, web") {
-		t.Errorf("stdout = %q, want %q", r.h.out, vercelDeployedLine(sha, "admin, web"))
+	if r.h.out.String() != vercelDeployedOutput(sha, "admin, web") {
+		t.Errorf("stdout = %q, want %q", r.h.out, vercelDeployedOutput(sha, "admin, web"))
 	}
 	if r.h.errb.Len() != 0 {
 		t.Errorf("stderr = %q, want none of vercel's output", r.h.errb)
@@ -347,7 +358,7 @@ func TestVercelDeployBuildsARootAppAtTheTopLevel(t *testing.T) {
 	if calls := r.calls(); !slices.Equal(calls, want) {
 		t.Errorf("calls = %q, want %q", calls, want)
 	}
-	if r.h.out.String() != vercelDeployedLine(sha, "site") {
+	if r.h.out.String() != vercelDeployedOutput(sha, "site") {
 		t.Errorf("stdout = %q", r.h.out)
 	}
 }
@@ -362,7 +373,7 @@ func TestVercelDeployFromABranchOtherThanMain(t *testing.T) {
 	if code := r.deploy(); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
 	}
-	if r.h.out.String() != vercelDeployedLine(sha, "admin, web") {
+	if r.h.out.String() != vercelDeployedOutput(sha, "admin, web") {
 		t.Errorf("stdout = %q", r.h.out)
 	}
 	if len(r.promotions()) != 2 {
@@ -535,7 +546,7 @@ func TestVercelDeployGoesOnWhenTheAnswerIsYes(t *testing.T) {
 	if code := r.deploy(); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
 	}
-	want := lacksLine("admin", adminLive) + lacksLine("web", webLive) + deployQuestion + vercelDeployedLine(sha, "admin, web")
+	want := lacksLine("admin", adminLive) + lacksLine("web", webLive) + deployQuestion + vercelDeployedOutput(sha, "admin, web")
 	if r.h.out.String() != want {
 		t.Errorf("stdout = %q, want %q", r.h.out, want)
 	}
@@ -609,7 +620,7 @@ func TestVercelDeployDoesntAskWhenTheCommitContainsWhatsLive(t *testing.T) {
 			if code := r.deploy(); code != 0 {
 				t.Fatalf("code = %d, stderr %q", code, r.h.errb)
 			}
-			if r.h.out.String() != vercelDeployedLine(sha, "admin, web") {
+			if r.h.out.String() != vercelDeployedOutput(sha, "admin, web") {
 				t.Errorf("stdout = %q, want only the deployed line", r.h.out)
 			}
 		})
@@ -627,7 +638,7 @@ func TestVercelDeployAsksOnceForItemsAndMissingCommits(t *testing.T) {
 	if code := r.deploy(); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
 	}
-	if want := openItemsText + lacksLine("web", live) + deployQuestion + vercelDeployedLine(sha, "admin, web"); r.h.out.String() != want {
+	if want := openItemsText + lacksLine("web", live) + deployQuestion + vercelDeployedOutput(sha, "admin, web"); r.h.out.String() != want {
 		t.Errorf("stdout = %q, want %q", r.h.out, want)
 	}
 }
@@ -642,7 +653,7 @@ func TestVercelDeployYesGoesOnWithoutAsking(t *testing.T) {
 	if code := r.deploy("--yes"); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
 	}
-	if want := openItemsText + lacksLine("web", live) + vercelDeployedLine(sha, "admin, web"); r.h.out.String() != want {
+	if want := openItemsText + lacksLine("web", live) + vercelDeployedOutput(sha, "admin, web"); r.h.out.String() != want {
 		t.Errorf("stdout = %q, want %q", r.h.out, want)
 	}
 	if len(r.promotions()) != 2 {
@@ -753,8 +764,8 @@ func TestVercelDeployPromotesNothingWhenABuildFails(t *testing.T) {
 			if want := tc.want + refusedAnswer; r.h.errb.String() != want {
 				t.Errorf("stderr = %q, want %q", r.h.errb, want)
 			}
-			if r.h.out.Len() != 0 {
-				t.Errorf("stdout = %q", r.h.out)
+			if want := buildingLine(r.head(), "admin, web"); r.h.out.String() != want {
+				t.Errorf("stdout = %q, want %q", r.h.out, want)
 			}
 			if promoted := r.promotions(); len(promoted) != 0 {
 				t.Errorf("promoted %q", promoted)
@@ -827,8 +838,8 @@ func TestVercelDeployNamesTheAppThatDidntGoLive(t *testing.T) {
 			if r.h.errb.String() != want {
 				t.Errorf("stderr = %q, want %q", r.h.errb, want)
 			}
-			if r.h.out.Len() != 0 {
-				t.Errorf("stdout = %q", r.h.out)
+			if want := buildingLine(sha, "admin, web") + promotingLine("admin, web"); r.h.out.String() != want {
+				t.Errorf("stdout = %q, want %q", r.h.out, want)
 			}
 			teams := map[string]string{"admin": "colette-ops", "web": "colette-club"}
 			var tried []string
@@ -1043,7 +1054,7 @@ func TestVercelDeployJSONPrintsOneObjectPerApp(t *testing.T) {
 	if !strings.HasPrefix(r.h.out.String(), wantKeys) {
 		t.Errorf("stdout = %q, want it to start with %q", r.h.out, wantKeys)
 	}
-	if r.h.errb.String() != vercelDeployedLine(sha, "admin, web") {
+	if r.h.errb.String() != vercelDeployedOutput(sha, "admin, web") {
 		t.Errorf("stderr = %q", r.h.errb)
 	}
 }

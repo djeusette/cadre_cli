@@ -229,7 +229,8 @@ func TestVercelDeployIsDocumentedInStep(t *testing.T) {
 			"folder must be in the checkout and hold a .vercelignore",
 			"Every app builds at once, each in its folder, with vercel deploy --prod --skip-domain. Once every build is ready,",
 			"runs vercel promote for each, so they go live together.",
-			"A failed build promotes nothing and shows what vercel printed, and a failed promotion stops the ones after it.",
+			"It says which commit it builds for which apps, then that it promotes them.",
+			"A failed build promotes nothing and shows what vercel printed, and a failed promotion stops the ones after it and says which apps went live.",
 			"apps on both",
 		} {
 			if !strings.Contains(said, want) {

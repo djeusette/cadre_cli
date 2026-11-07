@@ -289,9 +289,11 @@ once origin has it after a git fetch. The tree must be clean, and each app's
 folder must be in the checkout and hold a .vercelignore, as vercel uploads the
 folder and doesn't read .gitignore. Every app builds at once, each in its
 folder, with vercel deploy --prod --skip-domain. Once every build is ready,
-cadre runs vercel promote for each, so they go live together. A failed build
+cadre runs vercel promote for each, so they go live together. It says which
+commit it builds for which apps, then that it promotes them. A failed build
 promotes nothing and shows what vercel printed, and a failed promotion stops
-the ones after it. vercel must be installed and signed in.
+the ones after it and says which apps went live. vercel must be installed and
+signed in.
 
 Open Before deploying items are listed, and cadre asks before going on. It asks
 the same, in one question, when the commit lacks what a Vercel app runs now.
@@ -301,7 +303,7 @@ working tree again, and for Fly the branch, so a change made in the meantime
 stops the deploy.`,
 				flags: []helpRow{
 					{"--yes", "Go on despite open Before deploying items or what the commit lacks"},
-					{"--json", "Print one JSON object per app deployed, with fly's output on stderr"},
+					{"--json", "Print one JSON object per app deployed, and all else on stderr"},
 				},
 				examples: []string{
 					"cadre deploy shop-api",
