@@ -3,6 +3,7 @@ package git_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -428,6 +429,57 @@ func TestOnOriginIgnoresOtherRefs(t *testing.T) {
 	}
 }
 
+// origin/HEAD only points at another branch, so a commit it alone contains isn't on origin.
+func TestOnOriginWhenOnlyOriginHEADContainsIt(t *testing.T) {
+	_, work := clone(t)
+	c := open(t, work)
+	commit(t, work, "local.txt")
+	head, _ := c.Head(context.Background())
+	run(t, work, "update-ref", "--no-deref", "refs/remotes/origin/HEAD", head)
+
+	if got, err := c.OnOrigin(context.Background(), head); err != nil || got {
+		t.Errorf("OnOrigin = (%v, %v), want false", got, err)
+	}
+}
+
+// Only origin/HEAD itself is dropped: a branch whose name starts with HEAD is a branch like any other.
+func TestOnOriginForABranchNamedLikeHEAD(t *testing.T) {
+	origin, work := clone(t)
+	c := open(t, work)
+	sha := pushBranch(t, origin, "HEAD-fix")
+	if err := c.FetchAll(context.Background()); err != nil {
+		t.Fatalf("FetchAll: %v", err)
+	}
+
+	if got, err := c.OnOrigin(context.Background(), sha); err != nil || !got {
+		t.Errorf("OnOrigin = (%v, %v), want true", got, err)
+	}
+}
+
+// color.ui=always colours git's output even through a pipe, and a coloured name is still origin's branch.
+func TestOnOriginWithColourAlwaysOn(t *testing.T) {
+	origin, work := clone(t)
+	c := open(t, work)
+	run(t, work, "config", "color.ui", "always")
+	sha := pushBranch(t, origin, "feature")
+	if err := c.FetchAll(context.Background()); err != nil {
+		t.Fatalf("FetchAll: %v", err)
+	}
+
+	if got, err := c.OnOrigin(context.Background(), sha); err != nil || !got {
+		t.Errorf("OnOrigin = (%v, %v), want true", got, err)
+	}
+}
+
+func TestOnOriginForAnUnknownCommit(t *testing.T) {
+	_, work := clone(t)
+	c := open(t, work)
+
+	if got, err := c.OnOrigin(context.Background(), strings.Repeat("a", 40)); err == nil || got {
+		t.Errorf("OnOrigin = (%v, %v), want (false, an error)", got, err)
+	}
+}
+
 func TestContainsAnAncestor(t *testing.T) {
 	_, work := clone(t)
 	c := open(t, work)
@@ -462,6 +514,44 @@ func TestContainsAnUnknownCommit(t *testing.T) {
 	c := open(t, work)
 	ctx := context.Background()
 	head, _ := c.Head(ctx)
+	unknown := strings.Repeat("a", 40)
+
+	if got, err := c.Contains(ctx, head, unknown); err != nil || got {
+		t.Errorf("Contains(head, unknown) = (%v, %v), want (false, nil)", got, err)
+	}
+	if got, err := c.Contains(ctx, unknown, head); err != nil || got {
+		t.Errorf("Contains(unknown, head) = (%v, %v), want (false, nil)", got, err)
+	}
+}
+
+// frenchGit is a git that speaks French unless LC_ALL is C, as a git with its translations does in a French locale.
+const frenchGit = `#!/bin/sh
+[ "$LC_ALL" = C ] && exec '%[1]s' "$@"
+err=$(mktemp)
+'%[1]s' "$@" 2>"$err"
+code=$?
+sed 's/Not a valid commit name/Nom de commit invalide/' "$err" >&2
+rm -f "$err"
+exit $code
+`
+
+// A commit git doesn't know reads the same in any language.
+func TestContainsAnUnknownCommitInAnyLanguage(t *testing.T) {
+	_, work := clone(t)
+	c := open(t, work)
+	ctx := context.Background()
+	head, _ := c.Head(ctx)
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "git"), fmt.Sprintf(frenchGit, realGit))
+	if err := os.Chmod(filepath.Join(bin, "git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("LC_ALL", "fr_FR.UTF-8")
 	unknown := strings.Repeat("a", 40)
 
 	if got, err := c.Contains(ctx, head, unknown); err != nil || got {

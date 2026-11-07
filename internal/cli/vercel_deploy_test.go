@@ -662,7 +662,9 @@ func TestVercelDeployWhenGitFails(t *testing.T) {
 		want    string
 	}{
 		{"the fetch", func(*vercelRig) string { return "fetch origin --prune" }, "Could not fetch origin: git broke\n"},
-		{"asking origin", func(r *vercelRig) string { return "branch -r --contains " + r.head() }, "git broke\n"},
+		{"asking origin", func(r *vercelRig) string {
+			return "for-each-ref --contains " + r.head() + " --format=%(refname) refs/remotes/origin/"
+		}, "git broke\n"},
 		{"comparing the live commit", func(r *vercelRig) string {
 			live := r.pushedElsewhere("production")
 			r.app("web").last = lastDeploy(live)
