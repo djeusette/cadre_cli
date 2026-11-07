@@ -925,26 +925,33 @@ func TestVercelDeployOnASignalWhilePromoting(t *testing.T) {
 	for _, tc := range []struct {
 		signal, interrupter string
 		tried               []string // the apps whose promotion ran, in order
-		stderr              string
+		stderr              func(sha string) string
 	}{
 		{"INT", "admin", []string{"admin"},
-			"cadre stopped while promoting admin. Check Vercel to see whether it went live.\nweb built but didn't go live: cadre stopped before promoting it.\n"},
+			func(string) string {
+				return "cadre stopped while promoting admin. Check Vercel to see whether it went live.\nweb built but didn't go live: cadre stopped before promoting it.\n"
+			}},
 		{"TERM", "admin", []string{"admin"},
-			"cadre stopped while promoting admin. Check Vercel to see whether it went live.\nweb built but didn't go live: cadre stopped before promoting it.\n"},
-		{"TERM", "web", []string{"admin", "web"}, "cadre stopped while promoting web. Check Vercel to see whether it went live.\n"},
+			func(string) string {
+				return "cadre stopped while promoting admin. Check Vercel to see whether it went live.\nweb built but didn't go live: cadre stopped before promoting it.\n"
+			}},
+		{"TERM", "web", []string{"admin", "web"}, func(sha string) string {
+			return "cadre stopped while promoting web. Check Vercel to see whether it went live.\nadmin went live on " + sha[:7] + ".\n"
+		}},
 	} {
 		t.Run(tc.signal+" while promoting "+tc.interrupter, func(t *testing.T) {
 			r := newVercelRig(t)
 			t.Setenv("FAKE_VERCEL_INTERRUPTER", tc.interrupter)
 			t.Setenv("FAKE_VERCEL_PROMOTE_SIGNAL", tc.signal)
 
+			sha := r.head()
 			code := r.deploy()
 
 			if code != 1 {
 				t.Errorf("code = %d, want 1", code)
 			}
-			if r.h.errb.String() != tc.stderr {
-				t.Errorf("stderr = %q, want %q", r.h.errb, tc.stderr)
+			if r.h.errb.String() != tc.stderr(sha) {
+				t.Errorf("stderr = %q, want %q", r.h.errb, tc.stderr(sha))
 			}
 			teams := map[string]string{"admin": "colette-ops", "web": "colette-club"}
 			var tried []string

@@ -105,6 +105,9 @@ func (s *session) reportPromotionStopped(v *vercelDeployment, i int, promote *ve
 	case w.signalled():
 		fmt.Fprintf(s.env.Stderr, "cadre stopped while promoting %s. Check Vercel to see whether it went live.\n", oneLine(v.apps[i].name))
 		s.reportUntried(v.apps[i+1:])
+		if i > 0 {
+			fmt.Fprintln(s.env.Stderr, wentLive(v, i))
+		}
 	default:
 		fmt.Fprintf(s.env.Stderr, "%s built but didn't go live: %s\n", oneLine(v.apps[i].name), promote.said())
 		fmt.Fprintln(s.env.Stderr, standing(v, i))
@@ -128,7 +131,12 @@ func standing(v *vercelDeployment, failed int) string {
 	if failed == 0 {
 		return notPromoted
 	}
-	return appNames(v.apps[:failed]) + " went live on " + v.commit[:7] + ". " + notPromoted
+	return wentLive(v, failed) + " " + notPromoted
+}
+
+// wentLive says the apps before v.apps[stopped] went live on the commit. It is for a stopped above 0.
+func wentLive(v *vercelDeployment, stopped int) string {
+	return appNames(v.apps[:stopped]) + " went live on " + v.commit[:7] + "."
 }
 
 // appNames is the apps' names, each on one line, joined by commas.
