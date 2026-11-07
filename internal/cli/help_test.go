@@ -210,6 +210,35 @@ func TestDeployConfigIsDocumentedInStep(t *testing.T) {
 	}
 }
 
+// The help and the README say the same about how a Vercel repo deploys.
+func TestVercelDeployIsDocumentedInStep(t *testing.T) {
+	srv, _ := helpServer(t)
+	h := newHarness(t, srv, nil)
+	if code := cli.Run([]string{"help", "deploy"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, text := range map[string]string{"help": h.out.String(), "README": strings.ReplaceAll(string(readme), "`", "")} {
+		said := strings.Join(strings.Fields(text), " ")
+		for _, want := range []string{
+			"deploys the commit the checkout is on, from any branch,",
+			"folder must be in the checkout and hold a .vercelignore",
+			"Every app builds at once, each in its folder, with vercel deploy --prod --skip-domain. Once every build is ready,",
+			"runs vercel promote for each, so they go live together.",
+			"A failed build promotes nothing",
+			"apps on both",
+		} {
+			if !strings.Contains(said, want) {
+				t.Errorf("%s doesn't say %q", name, want)
+			}
+		}
+	}
+}
+
 // The help and the README both name the status line repo show prints.
 func TestRepoShowStatusLineIsDocumented(t *testing.T) {
 	srv, _ := helpServer(t)

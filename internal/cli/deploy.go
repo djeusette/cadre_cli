@@ -35,7 +35,7 @@ var (
 type deployment struct {
 	repository api.Repository
 	checkout   git.Checkout
-	commit     string         // the full commit main and origin/main agree on
+	commit     string         // the full commit it deploys: for Fly, the one main and origin/main agree on
 	settings   map[string]any // the fly target's
 	statusURL  string         // the fly target's, or empty
 	app        string
@@ -62,7 +62,8 @@ func runDeploy(env Env, asJSON bool, args []string) int {
 	})
 }
 
-// deploy runs fly only once every check has passed and the open items are settled. Anything else ends here.
+// deploy reads the repo once, and takes the Vercel path when its tracked targets are on Vercel. Otherwise it runs fly
+// only once every check has passed and the open items are settled. Anything else ends here.
 func deploy(ctx context.Context, s *session, repo string, yes bool) int {
 	if !s.requireKey() {
 		return 1
@@ -70,6 +71,12 @@ func deploy(ctx context.Context, s *session, repo string, yes bool) int {
 	shown, err := s.client.ShowRepository(ctx, repo)
 	if err != nil {
 		return s.repoFailure(err, repo, "")
+	}
+	switch onFly, onVercel := trackedPlatforms(shown.Targets); {
+	case onFly && onVercel:
+		return fail(s.env, fmt.Errorf("%s has apps on Fly and Vercel. cadre deploy can't deploy it yet.", shown.Name))
+	case onVercel:
+		return vercelDeploy(ctx, s, shown, yes)
 	}
 
 	d := &deployment{repository: shown}
@@ -83,7 +90,7 @@ func deploy(ctx context.Context, s *session, repo string, yes bool) int {
 	if err != nil {
 		return s.repoFailure(err, repo, "")
 	}
-	if !s.settleOpenItems(next.BeforeDeploying, yes) {
+	if !s.settleOpenItems(next.BeforeDeploying, nil, yes) {
 		fmt.Fprintln(s.env.Stderr, msgNotDeployed)
 		return 1
 	}
@@ -91,6 +98,18 @@ func deploy(ctx context.Context, s *session, repo string, yes bool) int {
 		return fail(s.env, err)
 	}
 	return s.flyDeploy(ctx, d)
+}
+
+// trackedPlatforms reports whether any target cadre tracks is on Fly, and whether any is on Vercel. A repo with
+// neither takes the Fly path, which says how to connect an app.
+func trackedPlatforms(targets []api.Target) (onFly, onVercel bool) {
+	for _, t := range targets {
+		if t.Tracked {
+			onFly = onFly || t.Platform == "fly"
+			onVercel = onVercel || t.Platform == "vercel"
+		}
+	}
+	return onFly, onVercel
 }
 
 // checkCheckout finds the checkout, and holds its origin to the repo the person named.
@@ -274,16 +293,21 @@ func findFly(ctx context.Context, d *deployment) error {
 	return nil
 }
 
-// settleOpenItems lists what the deploy needs first and reports whether to go on: yes, or the person's answer.
-// With no items there is nothing to settle.
-func (s *session) settleOpenItems(items []api.BeforeDeployingItem, yes bool) bool {
-	if len(items) == 0 {
+// settleOpenItems lists what the deploy needs first, then each line on what the commit lacks, and reports whether to go
+// on: yes, or the person's answer to the one question they share. With nothing to list there is nothing to settle.
+func (s *session) settleOpenItems(items []api.BeforeDeployingItem, lacking []string, yes bool) bool {
+	if len(items) == 0 && len(lacking) == 0 {
 		return true
 	}
 	out := s.progress()
-	fmt.Fprintln(out, "Before deploying:")
+	if len(items) > 0 {
+		fmt.Fprintln(out, "Before deploying:")
+	}
 	for _, item := range items {
 		fmt.Fprintf(out, "  #%d %s\n", item.Number, oneLine(item.Text))
+	}
+	for _, line := range lacking {
+		fmt.Fprintln(out, line)
 	}
 	if yes {
 		return true

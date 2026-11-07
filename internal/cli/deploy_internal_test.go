@@ -68,3 +68,21 @@ func TestForwardSignalsReturnsWhenDoneCloses(t *testing.T) {
 		t.Fatal("never returned")
 	}
 }
+
+func TestDeploymentURLIsStdoutsLastHTTPSLine(t *testing.T) {
+	for _, tc := range []struct{ name, stdout, want string }{
+		{"the URL alone", "https://web-1a2b.vercel.app\n", "https://web-1a2b.vercel.app"},
+		{"the last of two", "https://vercel.com/inspect/1\nhttps://web-1a2b.vercel.app\n", "https://web-1a2b.vercel.app"},
+		{"after other lines, with no newline", "Vercel CLI 58\nhttps://web-1a2b.vercel.app", "https://web-1a2b.vercel.app"},
+		{"with a carriage return", "https://web-1a2b.vercel.app\r\n", "https://web-1a2b.vercel.app"},
+		{"not inside a line", "Production: https://web-1a2b.vercel.app\n", ""},
+		{"not over http", "http://web-1a2b.vercel.app\n", ""},
+		{"nothing", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := deploymentURL(tc.stdout); got != tc.want {
+				t.Errorf("deploymentURL(%q) = %q, want %q", tc.stdout, got, tc.want)
+			}
+		})
+	}
+}
