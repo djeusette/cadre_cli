@@ -290,8 +290,8 @@ folder must be in the checkout and hold a .vercelignore, as vercel uploads the
 folder and doesn't read .gitignore. Every app builds at once, each in its
 folder, with vercel deploy --prod --skip-domain. Once every build is ready,
 cadre runs vercel promote for each, so they go live together. A failed build
-promotes nothing and shows what vercel printed. vercel must be installed and
-signed in.
+promotes nothing and shows what vercel printed, and a failed promotion stops
+the ones after it. vercel must be installed and signed in.
 
 Open Before deploying items are listed, and cadre asks before going on. It asks
 the same, in one question, when the commit lacks what a Vercel app runs now.

@@ -14,8 +14,9 @@ import (
 
 // fakeVercel stands in for vercel. Only whoami answers without logging. Every other call adds "<folder> <args>" to
 // calls.log in $FAKE_VERCEL_DIR, and a "read" line when stdin gave it one. A build waits, up to two seconds, until all
-// $FAKE_VERCEL_APPS builds have started, so builds run one after the other fail. It prints its progress on stderr and
-// its URL on stdout. The env vars name the app, by its folder's name, that fails each way.
+// $FAKE_VERCEL_APPS builds have started, so builds run one after the other fail. Like vercel 58 with --json
+// --non-interactive, it prints its progress on stderr, other https URLs among it, and on stdout only a pretty-printed
+// JSON payload, whose deployment.url is the URL. The env vars name the app, by its folder's name, that fails each way.
 const fakeVercel = `#!/bin/sh
 log="$FAKE_VERCEL_DIR/calls.log"
 app=${PWD##*/}
@@ -35,9 +36,37 @@ deploy)
     if [ "$i" -gt 200 ]; then echo "$app built alone" >&2; exit 3; fi
     /bin/sleep 0.01
   done
+  if [ "$app" = "$FAKE_VERCEL_BROKEN" ]; then
+    echo "Building $app" >&2
+    echo "Error: $app's build broke" >&2
+    exit 1
+  fi
+  if [ "$app" = "$FAKE_VERCEL_NO_URL" ]; then
+    echo '{'
+    echo '  "status": "ok",'
+    echo '  "deployment": {'
+    echo "    \"id\": \"dpl_$app\""
+    echo '  }'
+    echo '}'
+    exit 0
+  fi
   echo "Building $app" >&2
-  if [ "$app" = "$FAKE_VERCEL_BROKEN" ]; then echo "Error: $app's build broke" >&2; exit 1; fi
-  if [ "$app" != "$FAKE_VERCEL_NO_URL" ]; then echo "https://$app-1a2b.vercel.app"; fi
+  echo "Inspect: https://vercel.com/colette/$app/dpl_$app" >&2
+  echo "Production: https://$app-stderr.vercel.app" >&2
+  echo '{'
+  echo '  "status": "ok",'
+  echo '  "deployment": {'
+  echo "    \"id\": \"dpl_$app\","
+  echo "    \"url\": \"https://$app-1a2b.vercel.app\","
+  echo "    \"inspectorUrl\": \"https://vercel.com/colette/$app/dpl_$app\","
+  echo '    "readyState": "READY",'
+  echo '    "target": "production"'
+  echo '  },'
+  echo "  \"message\": \"Deployment $app-1a2b.vercel.app ready.\","
+  echo '  "next": ['
+  echo "    { \"command\": \"vercel curl https://$app-next.vercel.app\", \"when\": \"Verify deployment\" }"
+  echo '  ]'
+  echo '}'
   echo "$PWD built" >> "$log"
   ;;
 promote)
@@ -53,7 +82,7 @@ esac
 
 // signalledVercel builds like fakeVercel, except that once every build has started, the one in $FAKE_VERCEL_SIGNALLER
 // sends $FAKE_VERCEL_SIGNAL to cadre, its parent. A signal a build gets shows in calls.log and ends it. A build that
-// gets none prints its URL after half a second.
+// gets none prints its JSON, with its URL, after half a second.
 const signalledVercel = `#!/bin/sh
 log="$FAKE_VERCEL_DIR/calls.log"
 app=${PWD##*/}
@@ -68,7 +97,7 @@ i=0
 while [ "$(started)" -lt "$FAKE_VERCEL_APPS" ] && [ "$i" -lt 200 ]; do i=$((i + 1)); /bin/sleep 0.01; done
 [ "$app" = "$FAKE_VERCEL_SIGNALLER" ] && kill -"$FAKE_VERCEL_SIGNAL" "$PPID"
 for i in 1 2 3 4 5 6 7 8 9 10; do /bin/sleep 0.05; done
-echo "https://$app-1a2b.vercel.app"
+echo "{\"status\": \"ok\", \"deployment\": {\"url\": \"https://$app-1a2b.vercel.app\"}}"
 `
 
 const (
@@ -217,11 +246,16 @@ func (r *vercelRig) assertVercelRefused(code int, want string) {
 func (r *vercelRig) folder(dir string) string { return filepath.Join(r.clone, dir) }
 
 func buildCall(folder, project, team string) string {
-	return folder + " deploy --prod --skip-domain --yes --non-interactive --project " + project + " --scope " + team
+	return folder + " deploy --prod --skip-domain --yes --non-interactive --json --project " + project + " --scope " + team
 }
 
 func promoteCall(folder, app, team string) string {
-	return folder + " promote https://" + app + "-1a2b.vercel.app --yes --scope " + team
+	return folder + " promote https://" + app + "-1a2b.vercel.app --yes --non-interactive --scope " + team
+}
+
+// noURLPayload is what the fake vercel prints on stdout for a build whose JSON has no deployment.url.
+func noURLPayload(app string) string {
+	return "{\n  \"status\": \"ok\",\n  \"deployment\": {\n    \"id\": \"dpl_" + app + "\"\n  }\n}"
 }
 
 func vercelDeployedLine(sha string, apps string) string {
@@ -291,7 +325,7 @@ func TestVercelDeployBuildsARootAppAtTheTopLevel(t *testing.T) {
 	want := []string{
 		buildCall(r.clone, "prj_site", "colette-club"),
 		r.clone + " built",
-		r.clone + " promote https://colette-api-1a2b.vercel.app --yes --scope colette-club",
+		promoteCall(r.clone, "colette-api", "colette-club"),
 	}
 	if calls := r.calls(); !slices.Equal(calls, want) {
 		t.Errorf("calls = %q, want %q", calls, want)
@@ -395,11 +429,22 @@ func TestVercelDeployRefusesAFolderWithNoVercelignore(t *testing.T) {
 	}
 }
 
+func TestVercelDeployNamesTheRootWhenItHasNoVercelignore(t *testing.T) {
+	for _, dir := range []string{".", "./"} {
+		t.Run(dir, func(t *testing.T) {
+			r := newVercelRig(t)
+			r.apps = []rigApp{{name: "site", project: "prj_site", dir: dir, team: "colette-club", last: "null"}}
+
+			r.assertVercelRefused(r.deploy(), "The repo's root has no .vercelignore. Add one that lets through only what site's build reads.\n")
+		})
+	}
+}
+
 func TestVercelDeployRefusesAnAppWithNoTeam(t *testing.T) {
 	r := newVercelRig(t)
 	r.app("admin").team = ""
 
-	r.assertVercelRefused(r.deploy(), "admin has no Vercel team in cadre. Connect it again with cadre repo set colette-api --vercel-project prj_admin --name admin --vercel-dir apps/admin.\n")
+	r.assertVercelRefused(r.deploy(), "admin has no Vercel team in cadre. Connect it again with cadre repo set colette-api --vercel-project prj_admin --name admin --vercel-dir apps/admin\n")
 }
 
 // Each app is checked in full, in name order, whatever order the server lists them in.
@@ -655,8 +700,8 @@ func TestVercelDeployPromotesNothingWhenABuildFails(t *testing.T) {
 		want                string
 	}{
 		{"one fails", "web", "", "web's build failed:\nBuilding web\nError: web's build broke\n"},
-		{"one prints no URL", "", "admin", "admin's build failed:\nBuilding admin\nvercel printed no deployment URL.\n"},
-		{"both fail", "web", "admin", "admin's build failed:\nBuilding admin\nvercel printed no deployment URL.\nweb's build failed:\nBuilding web\nError: web's build broke\n"},
+		{"one's JSON has no deployment.url", "", "admin", "admin's build failed:\n" + noURLPayload("admin") + "\nvercel printed no deployment URL.\n"},
+		{"both fail", "web", "admin", "admin's build failed:\n" + noURLPayload("admin") + "\nvercel printed no deployment URL.\nweb's build failed:\nBuilding web\nError: web's build broke\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newVercelRig(t)
@@ -696,25 +741,58 @@ func TestVercelDeployWhenVercelCantStart(t *testing.T) {
 	}
 }
 
-// The other apps still go live, so running it again builds them all and promotes the one that failed.
+// The first promotion that fails stops the ones after it, so those apps stay as they were. Running it again builds
+// them all and promotes them all.
 func TestVercelDeployNamesTheAppThatDidntGoLive(t *testing.T) {
+	for _, tc := range []struct {
+		unpromotable string
+		tried        []string // the apps whose promotion ran, in order
+	}{
+		{"admin", []string{"admin"}},
+		{"web", []string{"admin", "web"}},
+	} {
+		t.Run(tc.unpromotable, func(t *testing.T) {
+			r := newVercelRig(t)
+			t.Setenv("FAKE_VERCEL_UNPROMOTABLE", tc.unpromotable)
+
+			code := r.deploy()
+
+			if code != 1 {
+				t.Errorf("code = %d, want 1", code)
+			}
+			want := tc.unpromotable + " built but didn't go live: Error: " + tc.unpromotable + " can't be promoted\n"
+			if r.h.errb.String() != want {
+				t.Errorf("stderr = %q, want %q", r.h.errb, want)
+			}
+			if r.h.out.Len() != 0 {
+				t.Errorf("stdout = %q", r.h.out)
+			}
+			teams := map[string]string{"admin": "colette-ops", "web": "colette-club"}
+			var tried []string
+			for _, app := range tc.tried {
+				tried = append(tried, promoteCall(r.folder("apps/"+app), app, teams[app]))
+			}
+			if promoted := r.promotions(); !slices.Equal(promoted, tried) {
+				t.Errorf("promoted %q, want %q", promoted, tried)
+			}
+		})
+	}
+}
+
+// vercel prints its progress, other https URLs among it, on stderr, and the JSON on stdout. Only the JSON's
+// deployment.url goes to vercel promote.
+func TestVercelDeployPromotesTheURLFromVercelsJSON(t *testing.T) {
 	r := newVercelRig(t)
-	t.Setenv("FAKE_VERCEL_UNPROMOTABLE", "admin")
 
-	code := r.deploy()
-
-	if code != 1 {
-		t.Errorf("code = %d, want 1", code)
-	}
-	if want := "admin built but didn't go live: Error: admin can't be promoted\n"; r.h.errb.String() != want {
-		t.Errorf("stderr = %q, want %q", r.h.errb, want)
-	}
-	if r.h.out.Len() != 0 {
-		t.Errorf("stdout = %q", r.h.out)
+	if code := r.deploy(); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
 	}
 	want := []string{promoteCall(r.folder("apps/admin"), "admin", "colette-ops"), promoteCall(r.folder("apps/web"), "web", "colette-club")}
 	if promoted := r.promotions(); !slices.Equal(promoted, want) {
 		t.Errorf("promoted %q, want %q", promoted, want)
+	}
+	if r.h.errb.Len() != 0 {
+		t.Errorf("stderr = %q, want none of vercel's progress", r.h.errb)
 	}
 }
 

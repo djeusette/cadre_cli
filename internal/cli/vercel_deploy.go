@@ -129,11 +129,11 @@ func vercelAppOf(t api.Target) vercelApp {
 
 // checkApp refuses an app with no team to build in, a folder that isn't in the checkout, or a folder with no
 // .vercelignore: vercel uploads the folder it runs in and doesn't read .gitignore, so that file alone keeps credentials
-// and local files off Vercel.
+// and local files off Vercel. The no-team refusal ends with its command, so it pastes without a full stop.
 func (v *vercelDeployment) checkApp(app vercelApp) error {
 	name, dir := oneLine(app.name), oneLine(app.dir)
 	if app.team == "" {
-		return fmt.Errorf("%s has no Vercel team in cadre. Connect it again with cadre repo set %s --vercel-project %s --name %s --vercel-dir %s.",
+		return fmt.Errorf("%s has no Vercel team in cadre. Connect it again with cadre repo set %s --vercel-project %s --name %s --vercel-dir %s",
 			name, v.repository.Name, oneLine(app.project), name, dir)
 	}
 	folder, err := v.isFolder(app.dir)
@@ -148,9 +148,17 @@ func (v *vercelDeployment) checkApp(app vercelApp) error {
 		return err
 	}
 	if !ignoreFile {
-		return fmt.Errorf("%s has no .vercelignore. Add one that lets through only what %s's build reads.", dir, name)
+		return fmt.Errorf("%s has no .vercelignore. Add one that lets through only what %s's build reads.", folderName(app.dir), name)
 	}
 	return nil
+}
+
+// folderName is how a refusal names an app's folder: the repo's root, or the folder itself.
+func folderName(dir string) string {
+	if filepath.Clean(dir) == "." {
+		return "The repo's root"
+	}
+	return oneLine(dir)
 }
 
 // isFolder reports whether dir, relative to the top level and never above it, is a folder on disk, following links.

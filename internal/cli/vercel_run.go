@@ -24,7 +24,7 @@ func (s *session) buildThenPromote(ctx context.Context, v *vercelDeployment) int
 
 	builds := make([]*vercelCall, len(v.apps))
 	for i, app := range v.apps {
-		builds[i] = v.call(ctx, app, "deploy", "--prod", "--skip-domain", "--yes", "--non-interactive",
+		builds[i] = v.call(ctx, app, "deploy", "--prod", "--skip-domain", "--yes", "--non-interactive", "--json",
 			"--project", app.project, "--scope", app.team)
 	}
 	w.run(builds...)
@@ -48,20 +48,24 @@ func (s *session) buildThenPromote(ctx context.Context, v *vercelDeployment) int
 	return 0
 }
 
-// deploymentURL is the last line of vercel deploy's stdout that starts with https://, or empty when none does.
+// deploymentURL is deployment.url in the JSON that vercel deploy --json --non-interactive prints on stdout, where it
+// prints nothing else, or empty when stdout isn't that JSON or the URL isn't https. Only that URL goes to vercel promote,
+// so nothing else vercel prints can stand in for it.
 func deploymentURL(stdout string) string {
-	url := ""
-	for line := range strings.Lines(stdout) {
-		if line = strings.TrimSpace(line); strings.HasPrefix(line, "https://") {
-			url = line
-		}
+	var answer struct {
+		Deployment struct {
+			URL string `json:"url"`
+		} `json:"deployment"`
 	}
-	return url
+	if err := json.Unmarshal([]byte(stdout), &answer); err != nil || !strings.HasPrefix(answer.Deployment.URL, "https://") {
+		return ""
+	}
+	return answer.Deployment.URL
 }
 
-// promoteAll promotes each app's build in name order, one at a time, and reports whether every app went live. One that
-// fails doesn't stop the others, and running cadre deploy again builds and promotes them all. A signal stops the
-// promotions not started yet.
+// promoteAll promotes each app's build in name order, one at a time, and reports whether every app went live. The first
+// that fails stops the rest, so the apps after it stay as they were, and running cadre deploy again builds and promotes
+// them all. A signal stops the promotions not started yet.
 func (s *session) promoteAll(ctx context.Context, v *vercelDeployment, urls []string, w *signalWatch) bool {
 	live := true
 	for i, app := range v.apps {
@@ -71,10 +75,10 @@ func (s *session) promoteAll(ctx context.Context, v *vercelDeployment, urls []st
 			live = false
 			continue
 		}
-		promote := v.call(ctx, app, "promote", urls[i], "--yes", "--scope", app.team)
+		promote := v.call(ctx, app, "promote", urls[i], "--yes", "--non-interactive", "--scope", app.team)
 		if w.run(promote); promote.err != nil {
 			fmt.Fprintf(s.env.Stderr, "%s built but didn't go live: %s\n", name, promote.said())
-			live = false
+			return false
 		}
 	}
 	return live
