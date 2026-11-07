@@ -88,6 +88,46 @@ func (c Checkout) Fetch(ctx context.Context) error {
 	return err
 }
 
+// FetchAll updates every branch of origin and drops the ones deleted there, so OnOrigin sees what origin has now. Its
+// error holds git's message.
+func (c Checkout) FetchAll(ctx context.Context) error {
+	_, err := run(ctx, c.Dir, "fetch", "origin", "--prune")
+	return err
+}
+
+// OnOrigin reports whether the commit is on a branch of origin, as of the last fetch. Other remotes, local branches and
+// origin/HEAD, which only points at another branch, don't count.
+func (c Checkout) OnOrigin(ctx context.Context, commit string) (bool, error) {
+	out, err := run(ctx, c.Dir, "branch", "-r", "--contains", commit)
+	if err != nil {
+		return false, err
+	}
+	for line := range strings.Lines(out) {
+		ref := strings.TrimSpace(line)
+		if strings.HasPrefix(ref, "origin/") && !strings.HasPrefix(ref, "origin/HEAD") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// Contains reports whether ancestor is commit or one of its ancestors. A commit git doesn't know is false, not an
+// error, as the caller counts it as missing. Any other failure is an error.
+func (c Checkout) Contains(ctx context.Context, commit, ancestor string) (bool, error) {
+	_, err := run(ctx, c.Dir, "merge-base", "--is-ancestor", ancestor, commit)
+	var exit *exitError
+	switch {
+	case err == nil:
+		return true, nil
+	case !errors.As(err, &exit):
+		return false, err
+	case exit.code == 1, exit.code == 128 && strings.Contains(exit.message, "Not a valid commit name"):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
 // Head is the full commit HEAD points at.
 func (c Checkout) Head(ctx context.Context) (string, error) {
 	return run(ctx, c.Dir, "rev-parse", "HEAD")
@@ -135,8 +175,11 @@ func notACheckout(err error) error {
 	return err
 }
 
-// exitError is git exiting non-zero, with its trimmed stderr.
-type exitError struct{ message string }
+// exitError is git exiting non-zero, with its exit code and trimmed stderr.
+type exitError struct {
+	code    int
+	message string
+}
 
 func (e *exitError) Error() string { return e.message }
 
@@ -153,7 +196,7 @@ func run(ctx context.Context, dir string, args ...string) (string, error) {
 			if message == "" {
 				message = err.Error()
 			}
-			return "", &exitError{message: message}
+			return "", &exitError{code: exit.ExitCode(), message: message}
 		}
 		return "", err
 	}

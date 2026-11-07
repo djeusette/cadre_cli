@@ -352,3 +352,129 @@ func TestTrackedWhenGitFails(t *testing.T) {
 		t.Errorf("Tracked = (%v, %v), want (false, an error)", got, err)
 	}
 }
+
+// pushBranch makes a branch of origin with one more commit than main, from another clone, and returns its commit.
+func pushBranch(t *testing.T, origin, branch string) string {
+	t.Helper()
+	other := filepath.Join(t.TempDir(), "other")
+	run(t, filepath.Dir(other), "clone", origin, other)
+	run(t, other, "checkout", "-b", branch)
+	commit(t, other, branch+".txt")
+	run(t, other, "push", "origin", branch)
+	return run(t, other, "rev-parse", "HEAD")
+}
+
+func TestFetchAllSeesANewBranch(t *testing.T) {
+	origin, work := clone(t)
+	c := open(t, work)
+	pushBranch(t, origin, "feature")
+
+	if err := c.FetchAll(context.Background()); err != nil {
+		t.Fatalf("FetchAll: %v", err)
+	}
+	run(t, work, "rev-parse", "--verify", "refs/remotes/origin/feature")
+}
+
+func TestFetchAllPrunesDeletedBranches(t *testing.T) {
+	origin, work := clone(t)
+	c := open(t, work)
+	pushBranch(t, origin, "feature")
+	run(t, work, "fetch", "origin")
+	run(t, origin, "branch", "-D", "feature")
+
+	if err := c.FetchAll(context.Background()); err != nil {
+		t.Fatalf("FetchAll: %v", err)
+	}
+	if out := run(t, work, "branch", "-r", "--list", "origin/feature"); out != "" {
+		t.Errorf("origin/feature is still there: %q", out)
+	}
+}
+
+func TestOnOriginForAPushedBranch(t *testing.T) {
+	origin, work := clone(t)
+	c := open(t, work)
+	sha := pushBranch(t, origin, "feature")
+	if err := c.FetchAll(context.Background()); err != nil {
+		t.Fatalf("FetchAll: %v", err)
+	}
+
+	if got, err := c.OnOrigin(context.Background(), sha); err != nil || !got {
+		t.Errorf("OnOrigin = (%v, %v), want true", got, err)
+	}
+}
+
+func TestOnOriginForAnUnpushedCommit(t *testing.T) {
+	_, work := clone(t)
+	c := open(t, work)
+	commit(t, work, "local.txt")
+	head, _ := c.Head(context.Background())
+
+	if got, err := c.OnOrigin(context.Background(), head); err != nil || got {
+		t.Errorf("OnOrigin = (%v, %v), want false", got, err)
+	}
+}
+
+// Only refs of origin count: a branch of another remote, and a local branch, don't put a commit on origin.
+func TestOnOriginIgnoresOtherRefs(t *testing.T) {
+	origin, work := clone(t)
+	c := open(t, work)
+	sha := pushBranch(t, origin, "feature")
+	run(t, work, "remote", "add", "upstream", origin)
+	run(t, work, "fetch", "upstream", "feature")
+	run(t, work, "branch", "mine", sha)
+
+	if got, err := c.OnOrigin(context.Background(), sha); err != nil || got {
+		t.Errorf("OnOrigin = (%v, %v), want false", got, err)
+	}
+}
+
+func TestContainsAnAncestor(t *testing.T) {
+	_, work := clone(t)
+	c := open(t, work)
+	ctx := context.Background()
+	base, _ := c.Head(ctx)
+	commit(t, work, "second.txt")
+	head, _ := c.Head(ctx)
+
+	for _, same := range [][2]string{{head, base}, {head, head}} {
+		if got, err := c.Contains(ctx, same[0], same[1]); err != nil || !got {
+			t.Errorf("Contains(%s, %s) = (%v, %v), want true", same[0][:7], same[1][:7], got, err)
+		}
+	}
+}
+
+func TestContainsNotADescendant(t *testing.T) {
+	_, work := clone(t)
+	c := open(t, work)
+	ctx := context.Background()
+	base, _ := c.Head(ctx)
+	commit(t, work, "second.txt")
+	head, _ := c.Head(ctx)
+
+	if got, err := c.Contains(ctx, base, head); err != nil || got {
+		t.Errorf("Contains = (%v, %v), want false", got, err)
+	}
+}
+
+// A commit git doesn't know is one the commit can't contain, or one that can't be contained, not a failure.
+func TestContainsAnUnknownCommit(t *testing.T) {
+	_, work := clone(t)
+	c := open(t, work)
+	ctx := context.Background()
+	head, _ := c.Head(ctx)
+	unknown := strings.Repeat("a", 40)
+
+	if got, err := c.Contains(ctx, head, unknown); err != nil || got {
+		t.Errorf("Contains(head, unknown) = (%v, %v), want (false, nil)", got, err)
+	}
+	if got, err := c.Contains(ctx, unknown, head); err != nil || got {
+		t.Errorf("Contains(unknown, head) = (%v, %v), want (false, nil)", got, err)
+	}
+}
+
+func TestContainsWhenGitFails(t *testing.T) {
+	got, err := git.Checkout{Dir: outside(t)}.Contains(context.Background(), "HEAD", "HEAD")
+	if got || err == nil {
+		t.Errorf("Contains = (%v, %v), want (false, an error)", got, err)
+	}
+}
