@@ -79,7 +79,11 @@ deploy)
   echo "$PWD built" >> "$log"
   ;;
 promote)
-  if [ "$app" = "$FAKE_VERCEL_INTERRUPTER" ]; then kill -INT "$PPID"; /bin/sleep 0.2; fi
+  if [ "$app" = "$FAKE_VERCEL_INTERRUPTER" ]; then
+    trap 'echo "$PWD TERM" >> "$log"; exit 7' TERM
+    kill -"$FAKE_VERCEL_PROMOTE_SIGNAL" "$PPID"
+    /bin/sleep 0.2
+  fi
   if [ "$app" = "$FAKE_VERCEL_UNPROMOTABLE" ]; then echo "Error: $app can't be promoted" >&2; exit 1; fi
   echo "Success! $app is live"
   ;;
@@ -166,16 +170,17 @@ func newVercelRig(t *testing.T) *vercelRig {
 	r.withVercelignore("apps/web")
 	r.withVercelignore("apps/admin")
 	for key, value := range map[string]string{
-		"FAKE_VERCEL_DIR":          r.dir,
-		"FAKE_VERCEL_WHOAMI":       "0",
-		"FAKE_VERCEL_WHOAMI_SLEEP": "",
-		"FAKE_VERCEL_APPS":         "2",
-		"FAKE_VERCEL_BROKEN":       "",
-		"FAKE_VERCEL_NO_URL":       "",
-		"FAKE_VERCEL_ERRORED":      "",
-		"FAKE_VERCEL_PREVIEW":      "",
-		"FAKE_VERCEL_UNPROMOTABLE": "",
-		"FAKE_VERCEL_INTERRUPTER":  "",
+		"FAKE_VERCEL_DIR":            r.dir,
+		"FAKE_VERCEL_WHOAMI":         "0",
+		"FAKE_VERCEL_WHOAMI_SLEEP":   "",
+		"FAKE_VERCEL_APPS":           "2",
+		"FAKE_VERCEL_BROKEN":         "",
+		"FAKE_VERCEL_NO_URL":         "",
+		"FAKE_VERCEL_ERRORED":        "",
+		"FAKE_VERCEL_PREVIEW":        "",
+		"FAKE_VERCEL_UNPROMOTABLE":   "",
+		"FAKE_VERCEL_INTERRUPTER":    "",
+		"FAKE_VERCEL_PROMOTE_SIGNAL": "INT",
 	} {
 		t.Setenv(key, value)
 	}
@@ -797,26 +802,28 @@ func TestVercelDeployWhenVercelCantStart(t *testing.T) {
 	}
 }
 
-// The first promotion that fails stops the ones after it, so those apps stay as they were. Running it again builds
-// them all and promotes them all.
+// The first promotion that fails stops the ones after it, so those apps stay as they were, and cadre says where every
+// app stands. Running it again builds them all and promotes them all.
 func TestVercelDeployNamesTheAppThatDidntGoLive(t *testing.T) {
 	for _, tc := range []struct {
 		unpromotable string
-		tried        []string // the apps whose promotion ran, in order
+		tried        []string                // the apps whose promotion ran, in order
+		standing     func(sha string) string // where the apps stand
 	}{
-		{"admin", []string{"admin"}},
-		{"web", []string{"admin", "web"}},
+		{"admin", []string{"admin"}, func(string) string { return "admin, web weren't promoted.\n" }},
+		{"web", []string{"admin", "web"}, func(sha string) string { return "admin went live on " + sha[:7] + ". web wasn't promoted.\n" }},
 	} {
 		t.Run(tc.unpromotable, func(t *testing.T) {
 			r := newVercelRig(t)
 			t.Setenv("FAKE_VERCEL_UNPROMOTABLE", tc.unpromotable)
+			sha := r.head()
 
 			code := r.deploy()
 
 			if code != 1 {
 				t.Errorf("code = %d, want 1", code)
 			}
-			want := tc.unpromotable + " built but didn't go live: Error: " + tc.unpromotable + " can't be promoted\n"
+			want := tc.unpromotable + " built but didn't go live: Error: " + tc.unpromotable + " can't be promoted\n" + tc.standing(sha)
 			if r.h.errb.String() != want {
 				t.Errorf("stderr = %q, want %q", r.h.errb, want)
 			}
@@ -853,7 +860,7 @@ func TestVercelDeployPromotesTheURLFromVercelsJSON(t *testing.T) {
 }
 
 // SIGTERM reaches every build only through cadre. SIGINT never does, as the terminal sends it to the whole group. Either
-// way, nothing goes live, even a build that ends well.
+// way, nothing goes live, even a build that ends well, and cadre says only that: a build the signal ended didn't fail.
 func TestVercelDeployOnASignalPromotesNothing(t *testing.T) {
 	for _, tc := range []struct {
 		signal  string
@@ -861,7 +868,7 @@ func TestVercelDeployOnASignalPromotesNothing(t *testing.T) {
 		stderr  string
 		comment string
 	}{
-		{"TERM", []string{"TERM"}, "admin's build failed:\nexit status 7\nweb's build failed:\nexit status 7\n" + refusedAnswer, "both builds end on the TERM"},
+		{"TERM", []string{"TERM"}, refusedAnswer, "both builds end on the TERM"},
 		{"INT", nil, refusedAnswer, "both builds end well"},
 	} {
 		t.Run(tc.signal, func(t *testing.T) {
@@ -901,21 +908,45 @@ func TestVercelDeployOnASignalPromotesNothing(t *testing.T) {
 	}
 }
 
-// A signal between promotions stops the ones not started yet.
+// A signal during a promotion stops the ones not started yet. The promotion it came during may have gone through, so
+// cadre says to check, whether vercel ended on the signal (TERM, which cadre passes on) or went on (INT).
 func TestVercelDeployOnASignalWhilePromoting(t *testing.T) {
-	r := newVercelRig(t)
-	t.Setenv("FAKE_VERCEL_INTERRUPTER", "admin")
+	for _, tc := range []struct {
+		signal, interrupter string
+		tried               []string // the apps whose promotion ran, in order
+		stderr              string
+	}{
+		{"INT", "admin", []string{"admin"},
+			"cadre stopped while promoting admin. Check Vercel to see whether it went live.\nweb built but didn't go live: cadre stopped before promoting it.\n"},
+		{"TERM", "admin", []string{"admin"},
+			"cadre stopped while promoting admin. Check Vercel to see whether it went live.\nweb built but didn't go live: cadre stopped before promoting it.\n"},
+		{"TERM", "web", []string{"admin", "web"}, "cadre stopped while promoting web. Check Vercel to see whether it went live.\n"},
+	} {
+		t.Run(tc.signal+" while promoting "+tc.interrupter, func(t *testing.T) {
+			r := newVercelRig(t)
+			t.Setenv("FAKE_VERCEL_INTERRUPTER", tc.interrupter)
+			t.Setenv("FAKE_VERCEL_PROMOTE_SIGNAL", tc.signal)
 
-	code := r.deploy()
+			code := r.deploy()
 
-	if code != 1 {
-		t.Errorf("code = %d, want 1", code)
-	}
-	if want := "web built but didn't go live: cadre stopped before promoting it.\n"; r.h.errb.String() != want {
-		t.Errorf("stderr = %q, want %q", r.h.errb, want)
-	}
-	if promoted := r.promotions(); len(promoted) != 1 || !strings.HasPrefix(promoted[0], r.folder("apps/admin")+" ") {
-		t.Errorf("promoted %q, want admin alone", promoted)
+			if code != 1 {
+				t.Errorf("code = %d, want 1", code)
+			}
+			if r.h.errb.String() != tc.stderr {
+				t.Errorf("stderr = %q, want %q", r.h.errb, tc.stderr)
+			}
+			teams := map[string]string{"admin": "colette-ops", "web": "colette-club"}
+			var tried []string
+			for _, app := range tc.tried {
+				tried = append(tried, promoteCall(r.folder("apps/"+app), app, teams[app]))
+			}
+			if promoted := r.promotions(); !slices.Equal(promoted, tried) {
+				t.Errorf("promoted %q, want %q", promoted, tried)
+			}
+			if strings.Contains(r.h.out.String(), "Deployed") {
+				t.Errorf("stdout = %q", r.h.out)
+			}
+		})
 	}
 }
 

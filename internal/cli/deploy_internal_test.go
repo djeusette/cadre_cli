@@ -1,7 +1,11 @@
 package cli
 
 import (
+	"errors"
+	"io/fs"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -67,6 +71,29 @@ func TestForwardSignalsReturnsWhenDoneCloses(t *testing.T) {
 	case <-returned:
 	case <-time.After(2 * time.Second):
 		t.Fatal("never returned")
+	}
+}
+
+// A signal caught before a call starts keeps it from starting, however close behind the last check it came: run checks
+// again under the lock that forwarding takes, right before each start.
+func TestSignalWatchStartsNothingOnceASignalCame(t *testing.T) {
+	touch, err := exec.LookPath("touch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := watchSignals()
+	defer w.stop()
+	w.caught <- os.Interrupt
+	marker := filepath.Join(t.TempDir(), "ran")
+	c := &vercelCall{cmd: exec.Command(touch, marker)}
+
+	w.run(c)
+
+	if !errors.Is(c.err, errStopped) {
+		t.Errorf("err = %v, want errStopped", c.err)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the call ran: %v", err)
 	}
 }
 
