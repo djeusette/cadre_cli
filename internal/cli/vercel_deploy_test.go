@@ -10,18 +10,24 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/djeusette/cadre_cli/internal/cli"
 )
 
-// fakeVercel stands in for vercel. Only whoami answers without logging. Every other call adds "<folder> <args>" to
-// calls.log in $FAKE_VERCEL_DIR, and a "read" line when stdin gave it one. A build waits, up to two seconds, until all
-// $FAKE_VERCEL_APPS builds have started, so builds run one after the other fail. Like vercel 58 with --json
-// --non-interactive, it prints its progress on stderr, other https URLs among it, and on stdout only a pretty-printed
-// JSON payload, whose deployment.url is the URL. The env vars name the app, by its folder's name, that fails each way.
+// fakeVercel stands in for vercel. Only whoami answers without logging: signed out unless cadre passes
+// --non-interactive, and asleep for $FAKE_VERCEL_WHOAMI_SLEEP seconds when that is set, as a device-code login waits.
+// Every other call adds "<folder> <args>" to calls.log in $FAKE_VERCEL_DIR, and a "read" line when stdin gave it one.
+// A build waits, up to two seconds, until all $FAKE_VERCEL_APPS builds have started, so builds run one after the other
+// fail. Like vercel 58 with --json --non-interactive, it prints its progress on stderr, other https URLs among it, and
+// on stdout only a pretty-printed JSON payload, whose deployment.url is the URL. The env vars name the app, by its folder's name, that fails each way.
 const fakeVercel = `#!/bin/sh
 log="$FAKE_VERCEL_DIR/calls.log"
 app=${PWD##*/}
 started() { set -- "$FAKE_VERCEL_DIR"/started.*; echo $#; }
 if [ "$1" = whoami ]; then
+  [ "$*" = "whoami --non-interactive" ] || exit 97
+  [ -n "$FAKE_VERCEL_WHOAMI_SLEEP" ] && exec /bin/sleep "$FAKE_VERCEL_WHOAMI_SLEEP"
   echo ada
   exit "$FAKE_VERCEL_WHOAMI"
 fi
@@ -159,6 +165,7 @@ func newVercelRig(t *testing.T) *vercelRig {
 	for key, value := range map[string]string{
 		"FAKE_VERCEL_DIR":          r.dir,
 		"FAKE_VERCEL_WHOAMI":       "0",
+		"FAKE_VERCEL_WHOAMI_SLEEP": "",
 		"FAKE_VERCEL_APPS":         "2",
 		"FAKE_VERCEL_BROKEN":       "",
 		"FAKE_VERCEL_NO_URL":       "",
@@ -881,6 +888,21 @@ func TestVercelDeployWithoutVercelOrSignedOut(t *testing.T) {
 			r.assertVercelRefused(r.deploy(), tc.want)
 		})
 	}
+}
+
+// Signed out under Claude Code, vercel whoami starts a device-code login and waits. cadre gives up on it as signed out.
+func TestVercelDeployGivesUpOnAWhoamiThatWaits(t *testing.T) {
+	r := newVercelRig(t)
+	t.Setenv("FAKE_VERCEL_WHOAMI_SLEEP", "10")
+	cli.SetVercelWhoamiTimeout(t, 200*time.Millisecond)
+	start := time.Now()
+
+	code := r.deploy()
+
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("took %v, want cadre to stop waiting", took)
+	}
+	r.assertVercelRefused(code, refusedVercelSignIn)
 }
 
 func TestDeployRefusesAppsOnFlyAndVercel(t *testing.T) {

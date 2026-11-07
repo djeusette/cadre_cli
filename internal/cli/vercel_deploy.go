@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/djeusette/cadre_cli/internal/api"
 )
@@ -21,6 +22,10 @@ var (
 	errVercelNotFound    = errors.New("vercel isn't installed. See https://vercel.com/docs/cli.")
 	errVercelNotSignedIn = errors.New("vercel isn't signed in. Run vercel login.")
 )
+
+// vercelWhoamiTimeout is how long vercel whoami may take. Signed out under Claude Code, it starts a device-code login
+// and waits, so a whoami that outlasts it is a signed-out vercel.
+var vercelWhoamiTimeout = 30 * time.Second
 
 // fullSHA is a whole commit name in hex, SHA-1 or SHA-256. Only such a name reaches git as a commit to compare: any
 // other text could read as a ref or an option.
@@ -178,13 +183,18 @@ func (d *deployment) isFolder(dir string) (bool, error) {
 	}
 }
 
-// findVercel finds vercel and asks it who is signed in.
+// findVercel finds vercel and asks it who is signed in, never waiting on a login: a whoami that fails or outlasts
+// vercelWhoamiTimeout is signed out.
 func findVercel(ctx context.Context, v *vercelDeployment) error {
 	vercel, err := exec.LookPath("vercel")
 	if err != nil {
 		return errVercelNotFound
 	}
-	if err := exec.CommandContext(ctx, vercel, "whoami").Run(); err != nil {
+	ctx, cancel := context.WithTimeout(ctx, vercelWhoamiTimeout)
+	defer cancel()
+	whoami := exec.CommandContext(ctx, vercel, "whoami", "--non-interactive")
+	whoami.WaitDelay = time.Second
+	if err := whoami.Run(); err != nil {
 		return errVercelNotSignedIn
 	}
 	v.vercel = vercel
