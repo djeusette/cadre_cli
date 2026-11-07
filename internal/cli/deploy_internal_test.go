@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -92,13 +93,17 @@ const vercelPayload = `{
 func TestDeploymentURLIsDeploymentURLInVercelsJSON(t *testing.T) {
 	for _, tc := range []struct{ name, stdout, want string }{
 		{"the payload", vercelPayload, "https://web-1a2b.vercel.app"},
-		{"on one line", `{"deployment":{"url":"https://web-1a2b.vercel.app"}}`, "https://web-1a2b.vercel.app"},
-		{"no deployment.url", `{"status":"ok","deployment":{"id":"dpl_1"}}`, ""},
+		{"on one line", `{"status":"ok","deployment":{"url":"https://web-1a2b.vercel.app","target":"production"}}`, "https://web-1a2b.vercel.app"},
+		{"no deployment.url", `{"status":"ok","deployment":{"id":"dpl_1","target":"production"}}`, ""},
 		{"no deployment", `{"status":"ok","message":"https://web-1a2b.vercel.app"}`, ""},
 		{"the bare deployment, as --json alone or a build error prints it", `{"id":"dpl_1","url":"https://web-1a2b.vercel.app"}`, ""},
-		{"a URL that isn't https", `{"deployment":{"url":"web-1a2b.vercel.app"}}`, ""},
-		{"a URL that reads as a flag", `{"deployment":{"url":"--yes"}}`, ""},
-		{"a URL that isn't a string", `{"deployment":{"url":7}}`, ""},
+		{"a status other than ok", strings.Replace(vercelPayload, `"status": "ok"`, `"status": "error"`, 1), ""},
+		{"no status", `{"deployment":{"url":"https://web-1a2b.vercel.app","target":"production"}}`, ""},
+		{"a preview build", strings.Replace(vercelPayload, `"target": "production"`, `"target": "preview"`, 1), ""},
+		{"no target", `{"status":"ok","deployment":{"url":"https://web-1a2b.vercel.app"}}`, ""},
+		{"a URL that isn't https", `{"status":"ok","deployment":{"url":"web-1a2b.vercel.app","target":"production"}}`, ""},
+		{"a URL that reads as a flag", `{"status":"ok","deployment":{"url":"--yes","target":"production"}}`, ""},
+		{"a URL that isn't a string", `{"status":"ok","deployment":{"url":7,"target":"production"}}`, ""},
 		{"text before the JSON, which vercel never prints on stdout", "Deploying\n" + vercelPayload, ""},
 		{"two payloads", vercelPayload + vercelPayload, ""},
 		{"a URL line", "https://web-1a2b.vercel.app\n", ""},

@@ -27,9 +27,9 @@ var (
 // and waits, so a whoami that outlasts it is a signed-out vercel.
 var vercelWhoamiTimeout = 30 * time.Second
 
-// fullSHA is a whole commit name in hex, SHA-1 or SHA-256. Only such a name reaches git as a commit to compare: any
-// other text could read as a ref or an option.
-var fullSHA = regexp.MustCompile(`\A(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})\z`)
+// fullSHA is a whole SHA-1 commit name in hex, as cadre's commits are. Only such a name reaches git as a commit to
+// compare: any other text could read as a ref or an option.
+var fullSHA = regexp.MustCompile(`\A[0-9a-fA-F]{40}\z`)
 
 // vercelApp is one of the repo's Vercel targets, as cadre stores it.
 type vercelApp struct {

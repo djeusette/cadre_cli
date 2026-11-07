@@ -59,14 +59,17 @@ deploy)
   echo "Building $app" >&2
   echo "Inspect: https://vercel.com/colette/$app/dpl_$app" >&2
   echo "Production: https://$app-stderr.vercel.app" >&2
+  status=ok target=production
+  [ "$app" = "$FAKE_VERCEL_ERRORED" ] && status=error
+  [ "$app" = "$FAKE_VERCEL_PREVIEW" ] && target=preview
   echo '{'
-  echo '  "status": "ok",'
+  echo "  \"status\": \"$status\","
   echo '  "deployment": {'
   echo "    \"id\": \"dpl_$app\","
   echo "    \"url\": \"https://$app-1a2b.vercel.app\","
   echo "    \"inspectorUrl\": \"https://vercel.com/colette/$app/dpl_$app\","
   echo '    "readyState": "READY",'
-  echo '    "target": "production"'
+  echo "    \"target\": \"$target\""
   echo '  },'
   echo "  \"message\": \"Deployment $app-1a2b.vercel.app ready.\","
   echo '  "next": ['
@@ -103,7 +106,7 @@ i=0
 while [ "$(started)" -lt "$FAKE_VERCEL_APPS" ] && [ "$i" -lt 200 ]; do i=$((i + 1)); /bin/sleep 0.01; done
 [ "$app" = "$FAKE_VERCEL_SIGNALLER" ] && kill -"$FAKE_VERCEL_SIGNAL" "$PPID"
 for i in 1 2 3 4 5 6 7 8 9 10; do /bin/sleep 0.05; done
-echo "{\"status\": \"ok\", \"deployment\": {\"url\": \"https://$app-1a2b.vercel.app\"}}"
+echo "{\"status\": \"ok\", \"deployment\": {\"url\": \"https://$app-1a2b.vercel.app\", \"target\": \"production\"}}"
 `
 
 const (
@@ -169,6 +172,8 @@ func newVercelRig(t *testing.T) *vercelRig {
 		"FAKE_VERCEL_APPS":         "2",
 		"FAKE_VERCEL_BROKEN":       "",
 		"FAKE_VERCEL_NO_URL":       "",
+		"FAKE_VERCEL_ERRORED":      "",
+		"FAKE_VERCEL_PREVIEW":      "",
 		"FAKE_VERCEL_UNPROMOTABLE": "",
 		"FAKE_VERCEL_INTERRUPTER":  "",
 	} {
@@ -561,6 +566,24 @@ func TestVercelDeployCountsAnUnknownLiveCommitAsMissing(t *testing.T) {
 	}
 }
 
+// cadre's commits are 40-hex SHA-1, so a 64-hex name counts as missing, and git never sees it: here, git would break.
+func TestVercelDeployCountsA64HexLiveCommitAsMissing(t *testing.T) {
+	r := newVercelRig(t)
+	live := strings.Repeat("ab", 32)
+	r.app("admin").last = lastDeploy(live)
+	t.Setenv("PATH", r.gitBreaking("merge-base --is-ancestor "+live+" "+r.head()))
+
+	code := r.deploy()
+
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if want := lacksLine("admin", live) + deployQuestion + "\n"; r.h.out.String() != want {
+		t.Errorf("stdout = %q, want %q", r.h.out, want)
+	}
+	r.assertNothingRan()
+}
+
 func TestVercelDeployDoesntAskWhenTheCommitContainsWhatsLive(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -709,8 +732,8 @@ func TestVercelDeployPromotesNothingWhenABuildFails(t *testing.T) {
 		want                string
 	}{
 		{"one fails", "web", "", "web's build failed:\nBuilding web\nError: web's build broke\n"},
-		{"one's JSON has no deployment.url", "", "admin", "admin's build failed:\n" + noURLPayload("admin") + "\nvercel printed no deployment URL.\n"},
-		{"both fail", "web", "admin", "admin's build failed:\n" + noURLPayload("admin") + "\nvercel printed no deployment URL.\nweb's build failed:\nBuilding web\nError: web's build broke\n"},
+		{"one's JSON has no deployment.url", "", "admin", "admin's build failed:\n" + noURLPayload("admin") + "\nvercel gave no production deployment to promote.\n"},
+		{"both fail", "web", "admin", "admin's build failed:\n" + noURLPayload("admin") + "\nvercel gave no production deployment to promote.\nweb's build failed:\nBuilding web\nError: web's build broke\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newVercelRig(t)
@@ -727,6 +750,30 @@ func TestVercelDeployPromotesNothingWhenABuildFails(t *testing.T) {
 			}
 			if r.h.out.Len() != 0 {
 				t.Errorf("stdout = %q", r.h.out)
+			}
+			if promoted := r.promotions(); len(promoted) != 0 {
+				t.Errorf("promoted %q", promoted)
+			}
+		})
+	}
+}
+
+// A build whose JSON doesn't say ok, or says it built a preview, gave no production deployment to promote.
+func TestVercelDeployPromotesNothingWithoutAnOkProductionBuild(t *testing.T) {
+	for name, env := range map[string]string{"a status other than ok": "FAKE_VERCEL_ERRORED", "a preview build": "FAKE_VERCEL_PREVIEW"} {
+		t.Run(name, func(t *testing.T) {
+			r := newVercelRig(t)
+			t.Setenv(env, "admin")
+
+			code := r.deploy()
+
+			if code != 1 {
+				t.Errorf("code = %d, want 1", code)
+			}
+			stderr := r.h.errb.String()
+			if !strings.HasPrefix(stderr, "admin's build failed:\n") || !strings.Contains(stderr, `"url": "https://admin-1a2b.vercel.app"`) ||
+				!strings.HasSuffix(stderr, "\nvercel gave no production deployment to promote.\n"+refusedAnswer) {
+				t.Errorf("stderr = %q, want admin's build failed, with what vercel printed", stderr)
 			}
 			if promoted := r.promotions(); len(promoted) != 0 {
 				t.Errorf("promoted %q", promoted)

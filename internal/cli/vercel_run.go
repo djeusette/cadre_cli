@@ -49,15 +49,21 @@ func (s *session) buildThenPromote(ctx context.Context, v *vercelDeployment) int
 }
 
 // deploymentURL is deployment.url in the JSON that vercel deploy --json --non-interactive prints on stdout, where it
-// prints nothing else, or empty when stdout isn't that JSON or the URL isn't https. Only that URL goes to vercel promote,
-// so nothing else vercel prints can stand in for it.
+// prints nothing else, when that JSON's status is ok and its deployment's target is production. It is empty when stdout
+// isn't that JSON, the build isn't an ok production one, or the URL isn't https: the build failed. Only that URL goes to
+// vercel promote, so nothing else vercel prints can stand in for it.
 func deploymentURL(stdout string) string {
 	var answer struct {
+		Status     string `json:"status"`
 		Deployment struct {
-			URL string `json:"url"`
+			URL    string `json:"url"`
+			Target string `json:"target"`
 		} `json:"deployment"`
 	}
-	if err := json.Unmarshal([]byte(stdout), &answer); err != nil || !strings.HasPrefix(answer.Deployment.URL, "https://") {
+	if err := json.Unmarshal([]byte(stdout), &answer); err != nil || answer.Status != "ok" || answer.Deployment.Target != "production" {
+		return ""
+	}
+	if !strings.HasPrefix(answer.Deployment.URL, "https://") {
 		return ""
 	}
 	return answer.Deployment.URL
@@ -132,12 +138,13 @@ func (c *vercelCall) said() string {
 	return c.err.Error()
 }
 
-// buildFailure is what a failed build shows: what vercel printed, and for a build that ended well, that it gave no URL.
+// buildFailure is what a failed build shows: what vercel printed, and for a build that ended well, that it gave no ok
+// production deployment with a URL.
 func (c *vercelCall) buildFailure() string {
 	if c.err != nil {
 		return c.said()
 	}
-	return strings.TrimPrefix(c.said()+"\nvercel printed no deployment URL.", "\n")
+	return strings.TrimPrefix(c.said()+"\nvercel gave no production deployment to promote.", "\n")
 }
 
 // lockedBuffer is a buffer that a child's stdout and stderr, each copied on its own goroutine, can both write to.
