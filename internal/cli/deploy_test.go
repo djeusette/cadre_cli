@@ -26,6 +26,7 @@ const (
 	refusedMarked   = "Files marked skip-worktree or assume-unchanged can hide changes. Clear the marks, listed by git ls-files -v.\n"
 	refusedMain     = "main differs from origin/main. Run git pull, or push your commits, then deploy again.\n"
 	refusedApp      = "colette-api has no Fly app. Connect it with cadre repo set colette-api --fly-app <app>.\n"
+	refusedNoTarget = "colette-api has no app cadre can deploy. Connect one with cadre repo set colette-api --fly-app <app>, or --vercel-project <id> --name <app> --vercel-dir <folder>.\n"
 	refusedFly      = "fly isn't installed. See https://fly.io/docs/flyctl/install/.\n"
 	refusedSignIn   = "fly isn't signed in. Run fly auth login.\n"
 	refusedAnswer   = "Not deployed.\n"
@@ -381,7 +382,10 @@ func (r *deployRig) originGone() {
 }
 func (r *deployRig) onlyRender() { r.targets = renderTarget }
 func (r *deployRig) noTargets()  { r.targets = "" }
-func (r *deployRig) noAppSet()   { r.targets = `{"platform":"fly","settings":{},"tracked":true}` }
+func (r *deployRig) untrackedVercel() {
+	r.targets = `{"platform":"vercel","name":"web","settings":{},"tracked":false}`
+}
+func (r *deployRig) noAppSet() { r.targets = `{"platform":"fly","settings":{},"tracked":true}` }
 func (r *deployRig) noConfigFile() {
 	r.git(r.clone, "rm", "-q", "fly.toml")
 	r.git(r.clone, "commit", "-m", "no config")
@@ -784,8 +788,9 @@ func TestDeployRefuses(t *testing.T) {
 		{"a change under assume-unchanged", (*deployRig).assumeUnchangedChange, refusedMarked},
 		{"a local commit", (*deployRig).localCommit, refusedMain},
 		{"a commit pushed from a second clone", (*deployRig).commitOnOrigin, refusedMain},
-		{"targets with only render", (*deployRig).onlyRender, refusedApp},
-		{"no targets", (*deployRig).noTargets, refusedApp},
+		{"targets with only render", (*deployRig).onlyRender, refusedNoTarget},
+		{"no targets", (*deployRig).noTargets, refusedNoTarget},
+		{"a Vercel target cadre can't track", (*deployRig).untrackedVercel, refusedNoTarget},
 		{"a fly target with no app", (*deployRig).noAppSet, refusedApp},
 		{"a stored config the checkout doesn't have", (*deployRig).storedConfigMissing, refusedConfig("fly.custom.toml")},
 		{"a stored config that is a folder", (*deployRig).storedConfigIsAFolder, refusedConfig(".")},
@@ -817,7 +822,7 @@ func TestDeployChecksInOrder(t *testing.T) {
 		{"clean, then the fetch", (*deployRig).untrackedFile, (*deployRig).originGone, refusedClean},
 		{"the fetch, then main", (*deployRig).originGone, (*deployRig).localCommit, "Could not fetch origin: "},
 		{"main, then the Fly app", (*deployRig).localCommit, (*deployRig).onlyRender, refusedMain},
-		{"the Fly app, then the config", (*deployRig).onlyRender, (*deployRig).noConfigFile, refusedApp},
+		{"the Fly app, then the config", (*deployRig).onlyRender, (*deployRig).noConfigFile, refusedNoTarget},
 		{"the config, then fly", (*deployRig).noConfigFile, (*deployRig).flyMissing, refusedNoConfig},
 		{"fly, then the open items", (*deployRig).flyMissing, (*deployRig).cadreFails, refusedFly},
 		{"signed in, then the open items", (*deployRig).flySignedOut, (*deployRig).cadreFails, refusedSignIn},

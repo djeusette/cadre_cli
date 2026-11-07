@@ -176,16 +176,19 @@ func checkOrigin(ctx context.Context, d *deployment) error {
 	return nil
 }
 
-// findApp reads the fly target's app. A fly target without one is no better than no fly target.
+// findApp reads the fly target's app. A fly target without one is no better than no fly target. With no fly target, the
+// repo has no target cadre tracks, as a Vercel one takes the Vercel path, so the refusal names both ways to connect one.
 func findApp(_ context.Context, d *deployment) error {
-	targets := d.repository.Targets
-	if i := slices.IndexFunc(targets, func(t api.Target) bool { return t.Platform == "fly" }); i >= 0 {
-		d.settings = targets[i].Settings
-		d.statusURL = targets[i].StatusURL
+	name, targets := d.repository.Name, d.repository.Targets
+	i := slices.IndexFunc(targets, func(t api.Target) bool { return t.Platform == "fly" })
+	if i < 0 {
+		return fmt.Errorf("%s has no app cadre can deploy. Connect one with cadre repo set %s --fly-app <app>, or --vercel-project <id> --name <app> --vercel-dir <folder>.",
+			name, name)
 	}
+	d.settings = targets[i].Settings
+	d.statusURL = targets[i].StatusURL
 	app, _ := d.settings["app"].(string)
 	if app == "" {
-		name := d.repository.Name
 		return fmt.Errorf("%s has no Fly app. Connect it with cadre repo set %s --fly-app <app>.", name, name)
 	}
 	d.app = app
