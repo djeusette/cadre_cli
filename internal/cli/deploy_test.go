@@ -1732,3 +1732,34 @@ func TestDeployPrintsNamesFromCadreOnOneLine(t *testing.T) {
 		r.assertRefused(r.deploy(), "name"+shown+" has no Fly app. Connect it with cadre repo set repo"+shown+" --fly-app <app> --name name"+shown+".\n")
 	})
 }
+
+// The repo's name in a refusal is the server's, so an escape or a newline in it can't move the cursor or forge a line.
+func TestDeployRefusalsPrintTheReposNameOnOneLine(t *testing.T) {
+	const repo = "repo [2J Fake: line"
+	const vercelWeb = `{"platform":"vercel","name":"web","settings":{"project":"prj_web","dir":"apps/web"},"tracked":true,"account":"colette-club"}`
+	for _, tc := range []struct {
+		name, targets string
+		flags         []string
+		want          string
+	}{
+		{"several apps, no flag", kinfieldFamilyTarget + "," + kinfieldTarget, nil,
+			repo + " has 2 apps: kinfield, kinfield-family. Pass --app <name> or --all.\n"},
+		{"several platforms, no flag", kinfieldTarget + "," + vercelWeb, nil,
+			repo + " has 2 apps: kinfield, web. Pass --app <name>, in deploy order.\n"},
+		{"an app it doesn't have", kinfieldFamilyTarget + "," + kinfieldTarget, []string{"--app", "linear"},
+			repo + " has no app linear. Its apps: kinfield, kinfield-family.\n"},
+		{"--all on several platforms", kinfieldTarget + "," + vercelWeb, []string{"--all"},
+			repo + " has apps on more than one platform. Deploy each with --app <name>, in deploy order.\n"},
+		{"no app it can deploy", renderTarget, nil,
+			repo + " has no app cadre can deploy. Connect one with cadre repo set " + repo +
+				" --fly-app <app>, or --vercel-project <id> --name <app> --vercel-dir <folder>.\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newDeployRig(t)
+			r.name = "repo\u001b[2J\nFake: line"
+			r.targets = tc.targets
+
+			r.assertRefused(r.deploy(tc.flags...), tc.want)
+		})
+	}
+}

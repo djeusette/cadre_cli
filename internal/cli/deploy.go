@@ -104,26 +104,27 @@ func deploy(ctx context.Context, s *session, repo string, flags deployFlags) int
 // pickTargets is the apps the deploy takes, from those cadre deploy can deploy. With none it takes none, so the Fly
 // checks run first, then say how to connect one. With no flag, a repo with one app takes it, and a repo with several is
 // refused, listing them, with --all offered only when they share a platform. --app takes the app of that name. --all
-// takes every app, on one platform only.
+// takes every app, on one platform only. The server's names in a refusal are each on one line.
 func pickTargets(repo api.Repository, flags deployFlags) ([]api.Target, error) {
 	candidates := deployable(repo.Targets)
+	name := oneLine(repo.Name)
 	switch {
 	case len(candidates) == 0:
 		return nil, nil
 	case flags.app != "":
 		i := slices.IndexFunc(candidates, func(t api.Target) bool { return appName(t) == flags.app })
 		if i < 0 {
-			return nil, fmt.Errorf("%s has no app %s. Its apps: %s.", repo.Name, flags.app, targetNames(candidates))
+			return nil, fmt.Errorf("%s has no app %s. Its apps: %s.", name, flags.app, targetNames(candidates))
 		}
 		return candidates[i : i+1], nil
 	case flags.all && onSeveralPlatforms(candidates):
-		return nil, fmt.Errorf("%s has apps on more than one platform. Deploy each with --app <name>, in deploy order.", repo.Name)
+		return nil, fmt.Errorf("%s has apps on more than one platform. Deploy each with --app <name>, in deploy order.", name)
 	case flags.all:
 		return candidates, nil
 	case len(candidates) > 1 && onSeveralPlatforms(candidates):
-		return nil, fmt.Errorf("%s has %d apps: %s. Pass --app <name>, in deploy order.", repo.Name, len(candidates), targetNames(candidates))
+		return nil, fmt.Errorf("%s has %d apps: %s. Pass --app <name>, in deploy order.", name, len(candidates), targetNames(candidates))
 	case len(candidates) > 1:
-		return nil, fmt.Errorf("%s has %d apps: %s. Pass --app <name> or --all.", repo.Name, len(candidates), targetNames(candidates))
+		return nil, fmt.Errorf("%s has %d apps: %s. Pass --app <name> or --all.", name, len(candidates), targetNames(candidates))
 	default:
 		return candidates, nil
 	}
@@ -310,7 +311,7 @@ func checkOrigin(ctx context.Context, d *deployment) error {
 // app is no better than none. With no target, the repo has none cadre tracks, as a Vercel one takes the Vercel path, so
 // the refusal names both ways to connect one.
 func findApps(ctx context.Context, d *deployment) error {
-	name := d.repository.Name
+	name := oneLine(d.repository.Name)
 	if len(d.targets) == 0 {
 		return fmt.Errorf("%s has no app cadre can deploy. Connect one with cadre repo set %s --fly-app <app>, or --vercel-project <id> --name <app> --vercel-dir <folder>.",
 			name, name)
