@@ -151,10 +151,14 @@ func (s *session) sayFurtherApp(ctx context.Context, repo string) {
 	fmt.Fprintf(s.env.Stdout, "%s now has %d apps: %s. To move an app instead, pass --name <app>.\n", repo, len(apps), targetNames(apps))
 }
 
-// connectedLine is what set says about a tracked target: what it connected to, the account reading it if any, and
-// what it deploys with. It reads the server's answer, so a setting that didn't stick shows.
+// connectedLine is what set says about a tracked target: what it connected to, under what name when the app's name
+// isn't its Fly app's or it is on Vercel, the account reading it if any, and what it deploys with. It reads the
+// server's answer, so a setting that didn't stick shows.
 func connectedLine(t api.Target) string {
 	what := "app" + spaced(setting(t, "app"))
+	if t.Platform == "fly" && t.Name != "" && t.Name != setting(t, "app") {
+		what += " as" + spaced(oneLine(t.Name))
+	}
 	if t.Platform == "vercel" {
 		what = "project" + spaced(setting(t, "project")) + " as" + spaced(oneLine(t.Name))
 	}
@@ -252,9 +256,9 @@ func (s *session) reportRemoved(removed api.Unset, name string) int {
 	case s.asJSON:
 		fmt.Fprint(s.env.Stdout, string(removed.Raw))
 	case name != "":
-		fmt.Fprintf(s.env.Stdout, "Removed %s's %s target %s.\n", removed.Repo, displayName(removed.Platform), name)
+		fmt.Fprintf(s.env.Stdout, "Removed %s's %s app %s.\n", removed.Repo, displayName(removed.Platform), name)
 	default:
-		fmt.Fprintf(s.env.Stdout, "Removed %s's %s target.\n", removed.Repo, displayName(removed.Platform))
+		fmt.Fprintf(s.env.Stdout, "Removed %s's %s app.\n", removed.Repo, displayName(removed.Platform))
 	}
 	return 0
 }
