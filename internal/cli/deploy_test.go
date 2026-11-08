@@ -318,16 +318,16 @@ func (r *deployRig) deploy(flags ...string) int {
 	return cli.Run(append([]string{"deploy", "colette-api"}, flags...), r.h.deps)
 }
 
-// flyRan is where the first fly deploy ran, its arguments and the line it read from stdin, and fails the test when it
-// didn't run.
+// flyRan is the first fly deploy's three lines: where it ran, its arguments and the line it read from stdin. It fails
+// the test when no fly deploy ran.
 func (r *deployRig) flyRan() (dir, args, stdin string) {
 	r.t.Helper()
 	raw, err := os.ReadFile(r.log)
 	if err != nil {
 		r.t.Fatalf("fly deploy never ran: %v", err)
 	}
-	lines := strings.SplitN(string(raw), "\n", 3)
-	return lines[0], lines[1], strings.TrimSpace(lines[2])
+	lines := strings.SplitN(string(raw), "\n", 4)
+	return lines[0], lines[1], lines[2]
 }
 
 // flyDeploys is the arguments of each fly deploy, in the order they ran, or none when fly never deployed.
@@ -1673,4 +1673,62 @@ func TestDeployWithAFlagOnARepoWithNoApp(t *testing.T) {
 			r.assertRefused(r.deploy(flags...), refusedNoTarget)
 		})
 	}
+}
+
+// An app with no Fly app is named in the refusal, and the command connects that app, not one named after the Fly app.
+func TestDeployAllRefusesANamedAppWithNoFlyApp(t *testing.T) {
+	r := newDeployRig(t)
+	r.targets = kinfieldTarget + `,{"platform":"fly","name":"kinfield-family","settings":{},"tracked":true}`
+
+	r.assertRefused(r.deploy("--all"),
+		"kinfield-family has no Fly app. Connect it with cadre repo set colette-api --fly-app <app> --name kinfield-family.\n")
+}
+
+// cadre deploy deploys only to Fly and Vercel, so an app on another platform isn't one to pick from.
+func TestDeployPassesOverAnAppOnAnotherPlatform(t *testing.T) {
+	r := newDeployRig(t)
+	r.targets = `{"platform":"app_store","name":"ios","tracked":true},` + flyTarget
+	sha := r.head()
+
+	code := r.deploy()
+
+	if code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+	}
+	if _, args, _ := r.flyRan(); args != "deploy --app colette-api-prod --config fly.toml --image-label "+sha {
+		t.Errorf("fly ran with %q", args)
+	}
+}
+
+// Names come from the server, so an escape or a newline in one can't move the cursor or forge a line.
+func TestDeployPrintsNamesFromCadreOnOneLine(t *testing.T) {
+	const evil = `\u001b[2J\nFake: line`
+	const shown = " [2J Fake: line"
+	t.Run("the Fly app it deployed", func(t *testing.T) {
+		r := newDeployRig(t)
+		r.targets = `{"platform":"fly","name":"api","settings":{"app":"app` + evil + `"},"tracked":true}`
+		sha := r.head()
+
+		if code := r.deploy(); code != 0 {
+			t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+		}
+		if want := "fly output\n" + deployedTo(sha, "app"+shown); r.h.out.String() != want {
+			t.Errorf("stdout = %q, want %q", r.h.out, want)
+		}
+	})
+	t.Run("a config that isn't in the checkout", func(t *testing.T) {
+		r := newDeployRig(t)
+		r.name = "repo\u001b[2J\nFake: line"
+		r.targets = `{"platform":"fly","name":"name` + evil + `","settings":{"app":"app` + evil + `","config":"config` + evil + `"},"tracked":true}`
+
+		r.assertRefused(r.deploy(), "config"+shown+" isn't in this checkout. Set the right file with cadre repo set repo"+shown+
+			" --fly-app app"+shown+" --name name"+shown+" --fly-config <file>.\n")
+	})
+	t.Run("an app with no Fly app", func(t *testing.T) {
+		r := newDeployRig(t)
+		r.name = "repo\u001b[2J\nFake: line"
+		r.targets = `{"platform":"fly","name":"name` + evil + `","settings":{},"tracked":true}`
+
+		r.assertRefused(r.deploy(), "name"+shown+" has no Fly app. Connect it with cadre repo set repo"+shown+" --fly-app <app> --name name"+shown+".\n")
+	})
 }

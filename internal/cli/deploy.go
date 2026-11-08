@@ -103,7 +103,8 @@ func deploy(ctx context.Context, s *session, repo string, flags deployFlags) int
 
 // pickTargets is the apps the deploy takes, from those cadre deploy can deploy. With none it takes none, so the Fly
 // checks run first, then say how to connect one. With no flag, a repo with one app takes it, and a repo with several is
-// refused, listing them. --app takes the app of that name. --all takes every app, on one platform only.
+// refused, listing them, with --all offered only when they share a platform. --app takes the app of that name. --all
+// takes every app, on one platform only.
 func pickTargets(repo api.Repository, flags deployFlags) ([]api.Target, error) {
 	candidates := deployable(repo.Targets)
 	switch {
@@ -115,16 +116,22 @@ func pickTargets(repo api.Repository, flags deployFlags) ([]api.Target, error) {
 			return nil, fmt.Errorf("%s has no app %s. Its apps: %s.", repo.Name, flags.app, targetNames(candidates))
 		}
 		return candidates[i : i+1], nil
+	case flags.all && onSeveralPlatforms(candidates):
+		return nil, fmt.Errorf("%s has apps on more than one platform. Deploy each with --app <name>, in deploy order.", repo.Name)
 	case flags.all:
-		if slices.ContainsFunc(candidates, func(t api.Target) bool { return t.Platform != candidates[0].Platform }) {
-			return nil, fmt.Errorf("%s has apps on more than one platform. Deploy each with --app <name>, in deploy order.", repo.Name)
-		}
 		return candidates, nil
+	case len(candidates) > 1 && onSeveralPlatforms(candidates):
+		return nil, fmt.Errorf("%s has %d apps: %s. Pass --app <name>, in deploy order.", repo.Name, len(candidates), targetNames(candidates))
 	case len(candidates) > 1:
 		return nil, fmt.Errorf("%s has %d apps: %s. Pass --app <name> or --all.", repo.Name, len(candidates), targetNames(candidates))
 	default:
 		return candidates, nil
 	}
+}
+
+// onSeveralPlatforms reports whether the targets are on more than one platform.
+func onSeveralPlatforms(targets []api.Target) bool {
+	return slices.ContainsFunc(targets, func(t api.Target) bool { return t.Platform != targets[0].Platform })
 }
 
 // deployable is the targets cadre deploy can deploy, the tracked ones on Fly or Vercel, in name order.
@@ -297,7 +304,7 @@ func findApps(ctx context.Context, d *deployment) error {
 	for _, t := range d.targets {
 		app := flyAppOf(t)
 		if app.app == "" {
-			return fmt.Errorf("%s has no Fly app. Connect it with cadre repo set %s --fly-app <app>.", name, name)
+			return d.noFlyApp(app)
 		}
 		if err := d.pickConfig(ctx, &app); err != nil {
 			return err
@@ -305,6 +312,17 @@ func findApps(ctx context.Context, d *deployment) error {
 		d.flyApps = append(d.flyApps, app)
 	}
 	return nil
+}
+
+// noFlyApp refuses an app with no Fly app. One with a name is named, and so is the app the command connects; without
+// one, the repo is the only name to go by.
+func (d *deployment) noFlyApp(app flyApp) error {
+	repo := oneLine(d.repository.Name)
+	if app.name == "" {
+		return fmt.Errorf("%s has no Fly app. Connect it with cadre repo set %s --fly-app <app>.", repo, repo)
+	}
+	name := oneLine(app.name)
+	return fmt.Errorf("%s has no Fly app. Connect it with cadre repo set %s --fly-app <app> --name %s.", name, repo, name)
 }
 
 func flyAppOf(t api.Target) flyApp {
@@ -358,13 +376,14 @@ func (d *deployment) useConfig(app *flyApp, file string) error {
 
 // noConfig refuses the app's config with the repo set command that sets the right one. That command sets the app its
 // --name gives, else the one named after its Fly app, so it passes --name when the app's name is another.
+// Every name in it comes from the server, so each is on one line.
 func (d *deployment) noConfig(app flyApp, missing string) error {
 	name := ""
 	if app.name != app.app {
-		name = " --name " + app.name
+		name = " --name " + oneLine(app.name)
 	}
 	return fmt.Errorf("%s in this checkout. Set the right file with cadre repo set %s --fly-app %s%s%s.",
-		missing, d.repository.Name, app.app, name, app.configFlags())
+		oneLine(missing), oneLine(d.repository.Name), oneLine(app.app), name, app.configFlags())
 }
 
 // configFlags are what the person passes to repo set, which replaces the target, so they keep its status URL. The person
@@ -541,7 +560,7 @@ func (s *session) flyExitCode(err error) int {
 
 // reportDeployed names the Fly app that fly deployed, and with --json prints its object on a line of its own.
 func (s *session) reportDeployed(d *deployment, app flyApp) {
-	fmt.Fprintf(s.progress(), "Deployed %s to %s. Cadre shows it on its next check.\n", d.commit[:7], app.app)
+	fmt.Fprintf(s.progress(), "Deployed %s to %s. Cadre shows it on its next check.\n", d.commit[:7], oneLine(app.app))
 	if !s.asJSON {
 		return
 	}

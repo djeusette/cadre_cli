@@ -1027,13 +1027,14 @@ func TestVercelDeployOneAppOfSeveral(t *testing.T) {
 	}
 }
 
-// A repo with apps on Fly and Vercel has several apps, so it needs a flag.
+// A repo with apps on Fly and Vercel has several apps, so it needs a flag. --all would be refused, so the refusal
+// doesn't offer it.
 func TestDeployRefusesARepoOnFlyAndVercelWithNoFlag(t *testing.T) {
 	r := newVercelRig(t)
 
 	code := r.deployWithTargets(flyTarget + "," + r.app("web").json())
 
-	r.assertVercelRefused(code, "colette-api has 2 apps: colette-api-prod, web. Pass --app <name> or --all.\n")
+	r.assertVercelRefused(code, "colette-api has 2 apps: colette-api-prod, web. Pass --app <name>, in deploy order.\n")
 }
 
 // --app deploys that app on its platform, with that platform's checks only, and leaves the other platform alone.
