@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -88,6 +89,47 @@ func (c Checkout) Fetch(ctx context.Context) error {
 	return err
 }
 
+// FetchAll updates every branch of origin and drops the ones deleted there, so OnOrigin sees what origin has now. Its
+// error holds git's message.
+func (c Checkout) FetchAll(ctx context.Context) error {
+	_, err := run(ctx, c.Dir, "fetch", "origin", "--prune")
+	return err
+}
+
+// OnOrigin reports whether the commit is on a branch of origin, as of the last fetch. Other remotes, local branches and
+// origin/HEAD, which only points at another branch, don't count. for-each-ref prints each full ref name and never
+// colours it, whatever the person's config.
+func (c Checkout) OnOrigin(ctx context.Context, commit string) (bool, error) {
+	out, err := run(ctx, c.Dir, "for-each-ref", "--contains", commit, "--format=%(refname)", "refs/remotes/origin/")
+	if err != nil {
+		return false, err
+	}
+	for ref := range strings.Lines(out) {
+		if strings.TrimSpace(ref) != "refs/remotes/origin/HEAD" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// Contains reports whether ancestor is commit or one of its ancestors. A commit git doesn't know is false, not an
+// error, as the caller counts it as missing. Any other failure is an error. git runs untranslated, as its message is
+// how an unknown commit shows.
+func (c Checkout) Contains(ctx context.Context, commit, ancestor string) (bool, error) {
+	_, err := runUntranslated(ctx, c.Dir, "merge-base", "--is-ancestor", ancestor, commit)
+	var exit *exitError
+	switch {
+	case err == nil:
+		return true, nil
+	case !errors.As(err, &exit):
+		return false, err
+	case exit.code == 1, exit.code == 128 && strings.Contains(exit.message, "Not a valid commit name"):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
 // Head is the full commit HEAD points at.
 func (c Checkout) Head(ctx context.Context) (string, error) {
 	return run(ctx, c.Dir, "rev-parse", "HEAD")
@@ -135,15 +177,32 @@ func notACheckout(err error) error {
 	return err
 }
 
-// exitError is git exiting non-zero, with its trimmed stderr.
-type exitError struct{ message string }
+// exitError is git exiting non-zero, with its exit code and trimmed stderr.
+type exitError struct {
+	code    int
+	message string
+}
 
 func (e *exitError) Error() string { return e.message }
 
 // run runs git in dir ("" is the working directory) and returns its trimmed stdout, or an error holding its trimmed stderr.
 func run(ctx context.Context, dir string, args ...string) (string, error) {
+	return runWith(ctx, dir, nil, args...)
+}
+
+// runUntranslated is run with git's messages in English, for a caller that reads one. Other messages stay in the
+// person's language, as they are shown to them.
+func runUntranslated(ctx context.Context, dir string, args ...string) (string, error) {
+	return runWith(ctx, dir, []string{"LC_ALL=C"}, args...)
+}
+
+// runWith is run with env added to cadre's environment, where it wins.
+func runWith(ctx context.Context, dir string, env []string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	if env != nil {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -153,7 +212,7 @@ func run(ctx context.Context, dir string, args ...string) (string, error) {
 			if message == "" {
 				message = err.Error()
 			}
-			return "", &exitError{message: message}
+			return "", &exitError{code: exit.ExitCode(), message: message}
 		}
 		return "", err
 	}
