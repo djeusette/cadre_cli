@@ -147,7 +147,7 @@ func (s *session) sayFurtherApp(ctx context.Context, repo string) {
 		return
 	}
 	apps := slices.Clone(shown.Targets)
-	slices.SortFunc(apps, func(a, b api.Target) int { return strings.Compare(appName(a), appName(b)) })
+	slices.SortStableFunc(apps, byName)
 	fmt.Fprintf(s.env.Stdout, "%s now has %d apps: %s. To move an app instead, pass --name <app>.\n", repo, len(apps), targetNames(apps))
 }
 

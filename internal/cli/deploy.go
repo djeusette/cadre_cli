@@ -142,8 +142,13 @@ func deployable(targets []api.Target) []api.Target {
 			found = append(found, t)
 		}
 	}
-	slices.SortStableFunc(found, func(a, b api.Target) int { return strings.Compare(appName(a), appName(b)) })
+	slices.SortStableFunc(found, byName)
 	return found
+}
+
+// byName orders targets by appName.
+func byName(a, b api.Target) int {
+	return strings.Compare(appName(a), appName(b))
 }
 
 // appName is the target's name in cadre, else its app setting, for a cadre that doesn't name Fly targets yet.
@@ -155,13 +160,22 @@ func appName(t api.Target) string {
 	return app
 }
 
-// targetNames is the targets' names, each on one line, joined by commas.
+// targetNames is the targets' names, as joinNames gives them.
 func targetNames(targets []api.Target) string {
 	names := make([]string, len(targets))
 	for i, t := range targets {
-		names[i] = oneLine(appName(t))
+		names[i] = appName(t)
 	}
-	return strings.Join(names, ", ")
+	return joinNames(names)
+}
+
+// joinNames is the names, each on one line, joined by commas.
+func joinNames(names []string) string {
+	shown := make([]string, len(names))
+	for i, name := range names {
+		shown[i] = oneLine(name)
+	}
+	return strings.Join(shown, ", ")
 }
 
 // deployFlyApps runs fly for each app in turn, once every check has passed for all of them and the open items are

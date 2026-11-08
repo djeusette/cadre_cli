@@ -139,13 +139,13 @@ func wentLive(v *vercelDeployment, stopped int) string {
 	return appNames(v.apps[:stopped]) + " went live on " + v.commit[:7] + "."
 }
 
-// appNames is the apps' names, each on one line, joined by commas.
+// appNames is the apps' names, as joinNames gives them.
 func appNames(apps []vercelApp) string {
 	names := make([]string, len(apps))
 	for i, app := range apps {
-		names[i] = oneLine(app.name)
+		names[i] = app.name
 	}
-	return strings.Join(names, ", ")
+	return joinNames(names)
 }
 
 // reportVercelDeployed names every app on one line, and with --json prints one object per app.
