@@ -116,7 +116,6 @@ echo "{\"status\": \"ok\", \"deployment\": {\"url\": \"https://$app-1a2b.vercel.
 const (
 	refusedVercel       = "vercel isn't installed. See https://vercel.com/docs/cli.\n"
 	refusedVercelSignIn = "vercel isn't signed in. Run vercel login.\n"
-	refusedMixed        = "colette-api has apps on Fly and Vercel. cadre deploy can't deploy it yet.\n"
 	unknownCommit       = "0123456789abcdef0123456789abcdef01234567"
 )
 
@@ -312,7 +311,7 @@ func TestVercelDeployBuildsEveryAppThenPromotes(t *testing.T) {
 	sha := r.head()
 	admin, web := r.folder("apps/admin"), r.folder("apps/web")
 
-	code := r.deploy()
+	code := r.deploy("--all")
 
 	if code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
@@ -370,7 +369,7 @@ func TestVercelDeployFromABranchOtherThanMain(t *testing.T) {
 	r.git(r.clone, "push", "origin", "feature")
 	sha := r.head()
 
-	if code := r.deploy(); code != 0 {
+	if code := r.deploy("--all"); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
 	}
 	if r.h.out.String() != vercelDeployedOutput(sha, "admin, web") {
@@ -396,7 +395,7 @@ func TestVercelDeployRefusesACommitNotOnOrigin(t *testing.T) {
 			r := newVercelRig(t)
 			fault(r)
 
-			r.assertVercelRefused(r.deploy(), r.head()[:7]+" isn't on origin. Push it, then deploy again.\n")
+			r.assertVercelRefused(r.deploy("--all"), r.head()[:7]+" isn't on origin. Push it, then deploy again.\n")
 		})
 	}
 }
@@ -417,7 +416,7 @@ func TestVercelDeployRefusesAnUncleanTree(t *testing.T) {
 			r := newVercelRig(t)
 			tc.fault(r.deployRig)
 
-			r.assertVercelRefused(r.deploy(), tc.want)
+			r.assertVercelRefused(r.deploy("--all"), tc.want)
 		})
 	}
 }
@@ -434,7 +433,7 @@ func TestVercelDeployRefusesAMissingFolder(t *testing.T) {
 			r := newVercelRig(t)
 			r.app("admin").dir = tc.dir
 
-			r.assertVercelRefused(r.deploy(), tc.dir+" isn't in this checkout.\n")
+			r.assertVercelRefused(r.deploy("--all"), tc.dir+" isn't in this checkout.\n")
 		})
 	}
 }
@@ -452,7 +451,7 @@ func TestVercelDeployRefusesAFolderWithNoVercelignore(t *testing.T) {
 			r.git(r.clone, "push", "origin", "main")
 			fault(r)
 
-			r.assertVercelRefused(r.deploy(), "apps/admin has no .vercelignore. Add one that lets through only what admin's build reads.\n")
+			r.assertVercelRefused(r.deploy("--all"), "apps/admin has no .vercelignore. Add one that lets through only what admin's build reads.\n")
 		})
 	}
 }
@@ -472,7 +471,7 @@ func TestVercelDeployRefusesAnAppWithNoTeam(t *testing.T) {
 	r := newVercelRig(t)
 	r.app("admin").team = ""
 
-	r.assertVercelRefused(r.deploy(), "admin has no Vercel team in cadre. Connect it again with cadre repo set colette-api --vercel-project prj_admin --name admin --vercel-dir apps/admin\n")
+	r.assertVercelRefused(r.deploy("--all"), "admin has no Vercel team in cadre. Connect it again with cadre repo set colette-api --vercel-project prj_admin --name admin --vercel-dir apps/admin\n")
 }
 
 // Each app is checked in full, in name order, whatever order the server lists them in.
@@ -499,7 +498,7 @@ func TestVercelDeployChecksInOrder(t *testing.T) {
 			tc.first(r)
 			tc.second(r)
 
-			code := r.deploy()
+			code := r.deploy("--all")
 
 			if code != 1 || !strings.Contains(r.h.errb.String(), tc.want) {
 				t.Errorf("code = %d, stderr %q, want %q", code, r.h.errb, tc.want)
@@ -521,7 +520,7 @@ func TestVercelDeployAsksWhenTheCommitLacksWhatAnAppRuns(t *testing.T) {
 	live := r.pushedElsewhere("production")
 	r.app("web").last = lastDeploy(live)
 
-	code := r.deploy()
+	code := r.deploy("--all")
 
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
@@ -543,7 +542,7 @@ func TestVercelDeployGoesOnWhenTheAnswerIsYes(t *testing.T) {
 	r.h.deps.Stdin = strings.NewReader("y\n")
 	sha := r.head()
 
-	if code := r.deploy(); code != 0 {
+	if code := r.deploy("--all"); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
 	}
 	want := lacksLine("admin", adminLive) + lacksLine("web", webLive) + deployQuestion + vercelDeployedOutput(sha, "admin, web")
@@ -569,7 +568,7 @@ func TestVercelDeployCountsAnUnknownLiveCommitAsMissing(t *testing.T) {
 			commit := live(r)
 			r.app("admin").last = lastDeploy(commit)
 
-			code := r.deploy()
+			code := r.deploy("--all")
 
 			if code != 1 {
 				t.Errorf("code = %d, want 1", code)
@@ -589,7 +588,7 @@ func TestVercelDeployCountsA64HexLiveCommitAsMissing(t *testing.T) {
 	r.app("admin").last = lastDeploy(live)
 	t.Setenv("PATH", r.gitBreaking("merge-base --is-ancestor "+live+" "+r.head()))
 
-	code := r.deploy()
+	code := r.deploy("--all")
 
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
@@ -617,7 +616,7 @@ func TestVercelDeployDoesntAskWhenTheCommitContainsWhatsLive(t *testing.T) {
 			r.app("web").last, r.app("admin").last = tc.last(r)
 			sha := r.head()
 
-			if code := r.deploy(); code != 0 {
+			if code := r.deploy("--all"); code != 0 {
 				t.Fatalf("code = %d, stderr %q", code, r.h.errb)
 			}
 			if r.h.out.String() != vercelDeployedOutput(sha, "admin, web") {
@@ -635,7 +634,7 @@ func TestVercelDeployAsksOnceForItemsAndMissingCommits(t *testing.T) {
 	r.h.deps.Stdin = strings.NewReader("y\n")
 	sha := r.head()
 
-	if code := r.deploy(); code != 0 {
+	if code := r.deploy("--all"); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
 	}
 	if want := openItemsText + lacksLine("web", live) + deployQuestion + vercelDeployedOutput(sha, "admin, web"); r.h.out.String() != want {
@@ -650,7 +649,7 @@ func TestVercelDeployYesGoesOnWithoutAsking(t *testing.T) {
 	r.items = openItems
 	sha := r.head()
 
-	if code := r.deploy("--yes"); code != 0 {
+	if code := r.deploy("--all", "--yes"); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
 	}
 	if want := openItemsText + lacksLine("web", live) + vercelDeployedOutput(sha, "admin, web"); r.h.out.String() != want {
@@ -679,7 +678,7 @@ func TestVercelDeployRechecksBeforeBuilding(t *testing.T) {
 			r.h.deps.Stdin = &changingStdin{change: func() { tc.change(r) }, answer: strings.NewReader("y\n")}
 			sha := r.head()
 
-			code := r.deploy()
+			code := r.deploy("--all")
 
 			if code != 1 || r.h.errb.String() != tc.want(sha) {
 				t.Errorf("code = %d, stderr %q, want %q", code, r.h.errb, tc.want(sha))
@@ -693,7 +692,7 @@ func TestVercelDeployWhenCadreCantAnswer(t *testing.T) {
 	r := newVercelRig(t)
 	r.cadreFails()
 
-	code := r.deploy("--yes")
+	code := r.deploy("--all", "--yes")
 
 	if code != 1 || r.h.errb.Len() == 0 {
 		t.Errorf("code = %d, stderr %q", code, r.h.errb)
@@ -721,7 +720,7 @@ func TestVercelDeployWhenGitFails(t *testing.T) {
 			r := newVercelRig(t)
 			t.Setenv("PATH", r.gitBreaking(tc.failing(r)))
 
-			r.assertVercelRefused(r.deploy(), tc.want)
+			r.assertVercelRefused(r.deploy("--all"), tc.want)
 		})
 	}
 }
@@ -756,7 +755,7 @@ func TestVercelDeployPromotesNothingWhenABuildFails(t *testing.T) {
 			t.Setenv("FAKE_VERCEL_BROKEN", tc.broken)
 			t.Setenv("FAKE_VERCEL_NO_URL", tc.noURL)
 
-			code := r.deploy()
+			code := r.deploy("--all")
 
 			if code != 1 {
 				t.Errorf("code = %d, want 1", code)
@@ -781,7 +780,7 @@ func TestVercelDeployPromotesNothingWithoutAnOkProductionBuild(t *testing.T) {
 			r := newVercelRig(t)
 			t.Setenv(env, "admin")
 
-			code := r.deploy()
+			code := r.deploy("--all")
 
 			if code != 1 {
 				t.Errorf("code = %d, want 1", code)
@@ -803,7 +802,7 @@ func TestVercelDeployWhenVercelCantStart(t *testing.T) {
 	t.Setenv("FAKE_VERCEL_APPS", "1")
 	r.installFly("vercel", "#!/bin/sh\n[ \"$1\" = whoami ] && /bin/rm \"$0\"\nexit 0\n") // gone once cadre builds
 
-	code := r.deploy()
+	code := r.deploy("--all")
 
 	if code != 1 || !strings.HasPrefix(r.h.errb.String(), "admin's build failed:\nCould not run vercel: ") {
 		t.Errorf("code = %d, stderr %q", code, r.h.errb)
@@ -829,7 +828,7 @@ func TestVercelDeployNamesTheAppThatDidntGoLive(t *testing.T) {
 			t.Setenv("FAKE_VERCEL_UNPROMOTABLE", tc.unpromotable)
 			sha := r.head()
 
-			code := r.deploy()
+			code := r.deploy("--all")
 
 			if code != 1 {
 				t.Errorf("code = %d, want 1", code)
@@ -858,7 +857,7 @@ func TestVercelDeployNamesTheAppThatDidntGoLive(t *testing.T) {
 func TestVercelDeployPromotesTheURLFromVercelsJSON(t *testing.T) {
 	r := newVercelRig(t)
 
-	if code := r.deploy(); code != 0 {
+	if code := r.deploy("--all"); code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
 	}
 	want := []string{promoteCall(r.folder("apps/admin"), "admin", "colette-ops"), promoteCall(r.folder("apps/web"), "web", "colette-club")}
@@ -888,7 +887,7 @@ func TestVercelDeployOnASignalPromotesNothing(t *testing.T) {
 			t.Setenv("FAKE_VERCEL_SIGNALLER", "web")
 			t.Setenv("FAKE_VERCEL_SIGNAL", tc.signal)
 
-			code := r.deploy()
+			code := r.deploy("--all")
 
 			if code != 1 {
 				t.Errorf("code = %d, want 1", code)
@@ -945,7 +944,7 @@ func TestVercelDeployOnASignalWhilePromoting(t *testing.T) {
 			t.Setenv("FAKE_VERCEL_PROMOTE_SIGNAL", tc.signal)
 
 			sha := r.head()
-			code := r.deploy()
+			code := r.deploy("--all")
 
 			if code != 1 {
 				t.Errorf("code = %d, want 1", code)
@@ -981,7 +980,7 @@ func TestVercelDeployWithoutVercelOrSignedOut(t *testing.T) {
 			r := newVercelRig(t)
 			tc.fault(r)
 
-			r.assertVercelRefused(r.deploy(), tc.want)
+			r.assertVercelRefused(r.deploy("--all"), tc.want)
 		})
 	}
 }
@@ -993,7 +992,7 @@ func TestVercelDeployGivesUpOnAWhoamiThatWaits(t *testing.T) {
 	cli.SetVercelWhoamiTimeout(t, 200*time.Millisecond)
 	start := time.Now()
 
-	code := r.deploy()
+	code := r.deploy("--all")
 
 	if took := time.Since(start); took > 5*time.Second {
 		t.Errorf("took %v, want cadre to stop waiting", took)
@@ -1001,19 +1000,86 @@ func TestVercelDeployGivesUpOnAWhoamiThatWaits(t *testing.T) {
 	r.assertVercelRefused(code, refusedVercelSignIn)
 }
 
-func TestDeployRefusesAppsOnFlyAndVercel(t *testing.T) {
+func TestVercelDeployRefusesSeveralAppsWithNoFlag(t *testing.T) {
 	r := newVercelRig(t)
 
-	code := r.deployWithTargets(flyTarget + "," + r.apps[0].json())
+	r.assertVercelRefused(r.deploy(), "colette-api has 2 apps: admin, web. Pass --app <name> or --all.\n")
+}
 
-	r.assertVercelRefused(code, refusedMixed)
+// --app builds and promotes that app alone, and asks only about what it lacks.
+func TestVercelDeployOneAppOfSeveral(t *testing.T) {
+	r := newVercelRig(t)
+	r.app("admin").last = lastDeploy(r.pushedElsewhere("production"))
+	t.Setenv("FAKE_VERCEL_APPS", "1")
+	sha := r.head()
+	web := r.folder("apps/web")
+
+	code := r.deploy("--app", "web")
+
+	if code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+	}
+	if want := []string{buildCall(web, "prj_web", "colette-club"), web + " built", promoteCall(web, "web", "colette-club")}; !slices.Equal(r.calls(), want) {
+		t.Errorf("calls = %q, want %q", r.calls(), want)
+	}
+	if r.h.out.String() != vercelDeployedOutput(sha, "web") {
+		t.Errorf("stdout = %q, want %q", r.h.out, vercelDeployedOutput(sha, "web"))
+	}
+}
+
+// A repo with apps on Fly and Vercel has several apps, so it needs a flag.
+func TestDeployRefusesARepoOnFlyAndVercelWithNoFlag(t *testing.T) {
+	r := newVercelRig(t)
+
+	code := r.deployWithTargets(flyTarget + "," + r.app("web").json())
+
+	r.assertVercelRefused(code, "colette-api has 2 apps: colette-api-prod, web. Pass --app <name> or --all.\n")
+}
+
+// --app deploys that app on its platform, with that platform's checks only, and leaves the other platform alone.
+func TestDeployOneAppOfARepoOnFlyAndVercel(t *testing.T) {
+	t.Run("a Vercel app, from a branch Fly would refuse", func(t *testing.T) {
+		r := newVercelRig(t)
+		t.Setenv("FAKE_VERCEL_APPS", "1")
+		r.git(r.clone, "switch", "-c", "feature")
+		r.commit(r.clone, "feature.txt")
+		r.git(r.clone, "push", "origin", "feature")
+		web := r.folder("apps/web")
+
+		code := r.deployWithTargets(flyTarget+","+r.app("web").json(), "--app", "web")
+
+		if code != 0 {
+			t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+		}
+		if want := []string{buildCall(web, "prj_web", "colette-club"), web + " built", promoteCall(web, "web", "colette-club")}; !slices.Equal(r.calls(), want) {
+			t.Errorf("calls = %q, want %q", r.calls(), want)
+		}
+		r.assertNoDeploy()
+	})
+	t.Run("the Fly app, beside a Vercel app Vercel's checks would refuse", func(t *testing.T) {
+		r := newVercelRig(t)
+		r.app("web").dir = "apps/gone"
+		sha := r.head()
+
+		code := r.deployWithTargets(flyTarget+","+r.app("web").json(), "--app", "colette-api-prod")
+
+		if code != 0 {
+			t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+		}
+		if _, args, _ := r.flyRan(); args != "deploy --app colette-api-prod --config fly.toml --image-label "+sha {
+			t.Errorf("fly ran with %q", args)
+		}
+		if calls := r.calls(); len(calls) != 0 {
+			t.Errorf("vercel ran: %q", calls)
+		}
+	})
 }
 
 // deployWithTargets deploys with the server answering targets as they are.
-func (r *vercelRig) deployWithTargets(targets string) int {
+func (r *vercelRig) deployWithTargets(targets string, flags ...string) int {
 	r.t.Helper()
 	r.targets = targets
-	return r.deployRig.deploy()
+	return r.deployRig.deploy(flags...)
 }
 
 // Targets cadre can't track don't make a repo mixed: only Fly and Vercel are tracked.
@@ -1036,7 +1102,7 @@ func TestVercelDeployJSONPrintsOneObjectPerApp(t *testing.T) {
 	r := newVercelRig(t)
 	sha := r.head()
 
-	code := r.deploy("--json")
+	code := r.deploy("--all", "--json")
 
 	if code != 0 {
 		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
@@ -1066,16 +1132,22 @@ func TestVercelDeployJSONPrintsOneObjectPerApp(t *testing.T) {
 	}
 }
 
-// An app's name comes from the server, so it never reaches the terminal as anything but one line of text.
+// An app's name comes from the server, so it never reaches the terminal as anything but one line of text: not in the
+// list of apps a pick is refused with, nor in a refusal of the app.
 func TestVercelDeployPrintsAnAppNameOnOneLine(t *testing.T) {
-	r := newVercelRig(t)
-	r.app("admin").team = ""
-	r.app("admin").name = "ad\u001b[2Kmin\nDeploy anyway? [y/N] y"
+	for _, flags := range [][]string{nil, {"--app", "linear"}, {"--all"}} {
+		t.Run(fmt.Sprint(flags), func(t *testing.T) {
+			r := newVercelRig(t)
+			r.app("admin").team = ""
+			r.app("admin").name = "ad\u001b[2Kmin\nDeploy anyway? [y/N] y"
 
-	code := r.deploy()
+			code := r.deploy(flags...)
 
-	if code != 1 || strings.ContainsAny(strings.TrimSuffix(r.h.errb.String(), "\n"), "\n\u001b") {
-		t.Errorf("code = %d, stderr %q", code, r.h.errb)
+			if code != 1 || !strings.Contains(r.h.errb.String(), "ad [2Kmin Deploy anyway? [y/N] y") ||
+				strings.ContainsAny(strings.TrimSuffix(r.h.errb.String(), "\n"), "\n\u001b") {
+				t.Errorf("code = %d, stderr %q", code, r.h.errb)
+			}
+			r.assertNothingRan()
+		})
 	}
-	r.assertNothingRan()
 }

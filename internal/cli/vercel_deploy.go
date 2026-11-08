@@ -9,8 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"slices"
-	"strings"
 	"syscall"
 	"time"
 
@@ -38,7 +36,7 @@ type vercelApp struct {
 }
 
 // vercelDeployment is what the Vercel checks learn, in order, and all that the builds need. Its deployment holds the
-// repo, the checkout and the commit: HEAD, which origin has.
+// repo, the targets it deploys, the checkout and the commit: HEAD, which origin has.
 type vercelDeployment struct {
 	deployment
 	apps   []vercelApp // in name order
@@ -54,19 +52,19 @@ var vercelChecks = []func(context.Context, *vercelDeployment) error{
 	findVercel,
 }
 
-// vercelDeploy builds every Vercel app of the repo, then promotes them all, once every check has passed and the one
+// vercelDeploy builds every app d holds, all on Vercel, then promotes them all, once every check has passed and the one
 // question is settled. Anything else ends here.
-func vercelDeploy(ctx context.Context, s *session, repo api.Repository, yes bool) int {
-	v := &vercelDeployment{deployment: deployment{repository: repo}}
+func vercelDeploy(ctx context.Context, s *session, d deployment, yes bool) int {
+	v := &vercelDeployment{deployment: d}
 	for _, check := range vercelChecks {
 		if err := check(ctx, v); err != nil {
 			return fail(s.env, err)
 		}
 	}
 
-	next, err := s.client.NextDeploy(ctx, repo.Name)
+	next, err := s.client.NextDeploy(ctx, v.repository.Name)
 	if err != nil {
-		return s.repoFailure(err, repo.Name, "")
+		return s.repoFailure(err, v.repository.Name, "")
 	}
 	lacking, err := v.lacking(ctx)
 	if err != nil {
@@ -103,18 +101,14 @@ func checkPushed(ctx context.Context, v *vercelDeployment) error {
 	return nil
 }
 
-// findVercelApps reads the repo's Vercel apps in name order, and checks each in full before the next.
+// findVercelApps reads the apps v deploys, in name order, and checks each in full before the next.
 func findVercelApps(_ context.Context, v *vercelDeployment) error {
-	for _, t := range v.repository.Targets {
-		if t.Tracked && t.Platform == "vercel" {
-			v.apps = append(v.apps, vercelAppOf(t))
-		}
-	}
-	slices.SortFunc(v.apps, func(a, b vercelApp) int { return strings.Compare(a.name, b.name) })
-	for _, app := range v.apps {
+	for _, t := range v.targets {
+		app := vercelAppOf(t)
 		if err := v.checkApp(app); err != nil {
 			return err
 		}
+		v.apps = append(v.apps, app)
 	}
 	return nil
 }

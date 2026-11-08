@@ -270,19 +270,22 @@ history. Adding a team again replaces its token.`,
 			{
 				name:    "deploy",
 				summary: "Deploy a repo's Fly or Vercel apps, from a checkout of it",
-				forms:   []string{"<repo> [--yes]"},
+				forms:   []string{"<repo> [--app <name>|--all] [--yes]"},
 				about: `<repo> is the repo's name in Cadre, such as shop-api. Run it anywhere in a
-checkout of that repo. A repo with apps on both Fly and Vercel is refused.
+checkout of that repo. A repo with one app needs no flag. A repo with several
+needs --app <name> for one of them, or --all for every one. --all refuses a
+repo with apps on more than one platform.
 
 For a Fly app, cadre runs fly deploy at the checkout's top level, with the
 commit as the image label, so Cadre can tie the deploy to it. It refuses unless
 the checkout is on main, has no uncommitted changes or untracked files, and main
 equals origin/main after a git fetch. The repo needs a Fly app, set with cadre
-repo set, and fly must be installed and signed in.
+repo set, and fly must be installed and signed in. With --all, the Fly apps
+deploy one at a time, by name, and the first that fails stops the ones after it.
 
 The config file is the one set with --fly-config, else fly.production.toml if
 it's committed, else fly.toml. That file must be committed and on disk, or it
-refuses.
+refuses. Every app's file is checked before the first app deploys.
 
 For Vercel apps, cadre deploys the commit the checkout is on, from any branch,
 once origin has it after a git fetch. The tree must be clean, and each app's
@@ -292,22 +295,26 @@ folder, with vercel deploy --prod --skip-domain. Once every build is ready,
 cadre runs vercel promote for each, so they go live together. It says which
 commit it builds for which apps, then that it promotes them. A failed build
 promotes nothing and shows what vercel printed, and a failed promotion stops
-the ones after it and says which apps went live. vercel must be installed and
-signed in.
+the ones after it and says which apps went live. --app builds and promotes that
+app alone. vercel must be installed and signed in.
 
-Open Before deploying items are listed, and cadre asks before going on. It asks
-the same, in one question, when the commit lacks what a Vercel app runs now.
-With nothing to read, the answer is no. If Cadre can't say what is open, nothing
-deploys. Right before fly or vercel runs, cadre checks the commit and the
-working tree again, and for Fly the branch, so a change made in the meantime
-stops the deploy.`,
+Open Before deploying items are listed, and cadre asks once, before the first
+app deploys. It asks the same, in one question, when the commit lacks what a
+Vercel app runs now. With nothing to read, the answer is no. If Cadre can't say
+what is open, nothing deploys. Right before fly or vercel runs, cadre checks the
+commit and the working tree again, and for Fly the branch, so a change made in
+the meantime stops the deploy.`,
 				flags: []helpRow{
-					{"--yes", "Go on despite open Before deploying items or what the commit lacks"},
+					{"--app <name>", "Deploy that app alone, by its name in Cadre"},
+					{"--all", "Deploy every app of the repo"},
+					{"--yes", "Go on without asking about open items or what the commit lacks"},
 					{"--json", "Print one JSON object per app deployed, and all else on stderr"},
 				},
 				examples: []string{
 					"cadre deploy shop-api",
 					"cadre deploy shop-api --yes",
+					"cadre deploy shop-api --app shop-worker",
+					"cadre deploy shop-web --all",
 				},
 			},
 		},

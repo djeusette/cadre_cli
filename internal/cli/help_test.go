@@ -29,7 +29,7 @@ const (
 	usageRepoSet          = "Usage: cadre repo set <repo> --fly-app <app> [--fly-config <file>] [--status-url <u>]\n       cadre repo set <repo> --vercel-project <id> --name <app> --vercel-dir <folder>\n       cadre repo set <repo> --platform <name>\nRun cadre help repo set for details.\n"
 	usageRepoUnset        = "Usage: cadre repo unset <repo> --platform <name> [--name <app>]\nRun cadre help repo unset for details.\n"
 	usageRepoShow         = "Usage: cadre repo show <repo>\nRun cadre help repo show for details.\n"
-	usageDeploy           = "Usage: cadre deploy <repo> [--yes]\nRun cadre help deploy for details.\n"
+	usageDeploy           = "Usage: cadre deploy <repo> [--app <name>|--all] [--yes]\nRun cadre help deploy for details.\n"
 	usageFlyOrgAdd        = "Usage: cadre fly org add <org>\nRun cadre help fly org add for details.\n"
 	usageFlyOrgRemove     = "Usage: cadre fly org remove <org>\nRun cadre help fly org remove for details.\n"
 	usageVercelTeamAdd    = "Usage: cadre vercel team add <team>\nRun cadre help vercel team add for details.\n"
@@ -231,11 +231,40 @@ func TestVercelDeployIsDocumentedInStep(t *testing.T) {
 			"runs vercel promote for each, so they go live together.",
 			"It says which commit it builds for which apps, then that it promotes them.",
 			"A failed build promotes nothing and shows what vercel printed, and a failed promotion stops the ones after it and says which apps went live.",
-			"apps on both",
 		} {
 			if !strings.Contains(said, want) {
 				t.Errorf("%s doesn't say %q", name, want)
 			}
+		}
+	}
+}
+
+// The help and the README say the same about a repo with several apps.
+func TestSeveralAppsAreDocumentedInStep(t *testing.T) {
+	srv, _ := helpServer(t)
+	h := newHarness(t, srv, nil)
+	if code := cli.Run([]string{"help", "deploy"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, text := range map[string]string{"help": h.out.String(), "README": strings.ReplaceAll(string(readme), "`", "")} {
+		said := strings.Join(strings.Fields(text), " ")
+		for _, want := range []string{
+			"A repo with several needs --app <name> for one of them, or --all for every one.",
+			"--all refuses a repo with apps on more than one platform.",
+			"With --all, the Fly apps deploy one at a time, by name, and the first that fails stops the ones after it.",
+			"--app builds and promotes that app alone.",
+		} {
+			if !strings.Contains(said, want) {
+				t.Errorf("%s doesn't say %q", name, want)
+			}
+		}
+		if strings.Contains(said, "apps on both") {
+			t.Errorf("%s still says a repo with apps on both platforms is refused", name)
 		}
 	}
 }

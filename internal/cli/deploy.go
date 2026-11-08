@@ -34,13 +34,26 @@ var (
 // deployment is what the checks learn, in order, and all that the run needs.
 type deployment struct {
 	repository api.Repository
+	targets    []api.Target // the apps it deploys, all on one platform, in name order
 	checkout   git.Checkout
-	commit     string         // the full commit it deploys: for Fly, the one main and origin/main agree on
-	settings   map[string]any // the fly target's
-	statusURL  string         // the fly target's, or empty
-	app        string
-	config     string
-	fly        string // the path to flyctl or fly
+	commit     string   // the full commit it deploys: for Fly, the one main and origin/main agree on
+	flyApps    []flyApp // the targets, as the Fly checks find them
+	fly        string   // the path to flyctl or fly
+}
+
+// flyApp is one Fly target, as the checks find it.
+type flyApp struct {
+	name      string // its name in cadre
+	app       string // the Fly app's name
+	stored    string // the config file cadre stores for it, or empty
+	statusURL string // the target's, or empty
+	config    string // the config file it deploys with
+}
+
+// deployFlags are deploy's flags. At most one of app and all is given.
+type deployFlags struct {
+	app      string // the one app to deploy, by its name in cadre
+	all, yes bool
 }
 
 // deployChecks run in this order. The first to return an error ends the deploy, with that error as the refusal.
@@ -49,22 +62,28 @@ var deployChecks = []func(context.Context, *deployment) error{
 	checkBranch,
 	checkClean,
 	checkOrigin,
-	findApp,
-	pickConfig,
+	findApps,
 	findFly,
 }
 
-// runDeploy dispatches `deploy <repo> [--yes]`.
+// runDeploy dispatches `deploy <repo> [--app <name>|--all] [--yes]`.
 func runDeploy(env Env, asJSON bool, args []string) int {
-	args, yes := splitBoolFlag(args, "--yes")
+	var flags deployFlags
+	args, flags.yes = splitBoolFlag(args, "--yes")
+	args, flags.all = splitBoolFlag(args, "--all")
+	app, args, ok := takeFlag(args, "--app")
+	if !ok || (app != "" && flags.all) {
+		return usageError(env, "deploy")
+	}
+	flags.app = app
 	return runCommand(env, asJSON, "deploy", args, 1, func(ctx context.Context, s *session, a []string) int {
-		return deploy(ctx, s, a[0], yes)
+		return deploy(ctx, s, a[0], flags)
 	})
 }
 
-// deploy reads the repo once, and takes the Vercel path when its tracked targets are on Vercel. Otherwise it runs fly
-// only once every check has passed and the open items are settled. Anything else ends here.
-func deploy(ctx context.Context, s *session, repo string, yes bool) int {
+// deploy reads the repo once and picks the apps it deploys, then takes the Vercel path for Vercel apps and the Fly path
+// for any other pick. Anything else ends here.
+func deploy(ctx context.Context, s *session, repo string, flags deployFlags) int {
 	if !s.requireKey() {
 		return 1
 	}
@@ -72,44 +91,100 @@ func deploy(ctx context.Context, s *session, repo string, yes bool) int {
 	if err != nil {
 		return s.repoFailure(err, repo, "")
 	}
-	switch onFly, onVercel := trackedPlatforms(shown.Targets); {
-	case onFly && onVercel:
-		return fail(s.env, fmt.Errorf("%s has apps on Fly and Vercel. cadre deploy can't deploy it yet.", shown.Name))
-	case onVercel:
-		return vercelDeploy(ctx, s, shown, yes)
+	targets, err := pickTargets(shown, flags)
+	if err != nil {
+		return fail(s.env, err)
 	}
+	d := deployment{repository: shown, targets: targets}
+	if len(targets) > 0 && targets[0].Platform == "vercel" {
+		return vercelDeploy(ctx, s, d, flags.yes)
+	}
+	return deployFlyApps(ctx, s, &d, flags.yes)
+}
 
-	d := &deployment{repository: shown}
+// pickTargets is the apps the deploy takes, from those cadre deploy can deploy. With none it takes none, so the Fly
+// checks run first, then say how to connect one. With no flag, a repo with one app takes it, and a repo with several is
+// refused, listing them. --app takes the app of that name. --all takes every app, on one platform only.
+func pickTargets(repo api.Repository, flags deployFlags) ([]api.Target, error) {
+	candidates := deployable(repo.Targets)
+	switch {
+	case len(candidates) == 0:
+		return nil, nil
+	case flags.app != "":
+		i := slices.IndexFunc(candidates, func(t api.Target) bool { return appName(t) == flags.app })
+		if i < 0 {
+			return nil, fmt.Errorf("%s has no app %s. Its apps: %s.", repo.Name, flags.app, targetNames(candidates))
+		}
+		return candidates[i : i+1], nil
+	case flags.all:
+		if slices.ContainsFunc(candidates, func(t api.Target) bool { return t.Platform != candidates[0].Platform }) {
+			return nil, fmt.Errorf("%s has apps on more than one platform. Deploy each with --app <name>, in deploy order.", repo.Name)
+		}
+		return candidates, nil
+	case len(candidates) > 1:
+		return nil, fmt.Errorf("%s has %d apps: %s. Pass --app <name> or --all.", repo.Name, len(candidates), targetNames(candidates))
+	default:
+		return candidates, nil
+	}
+}
+
+// deployable is the targets cadre deploy can deploy, the tracked ones on Fly or Vercel, in name order.
+func deployable(targets []api.Target) []api.Target {
+	var found []api.Target
+	for _, t := range targets {
+		if t.Tracked && (t.Platform == "fly" || t.Platform == "vercel") {
+			found = append(found, t)
+		}
+	}
+	slices.SortStableFunc(found, func(a, b api.Target) int { return strings.Compare(appName(a), appName(b)) })
+	return found
+}
+
+// appName is the target's name in cadre, else its app setting, for a cadre that doesn't name Fly targets yet.
+func appName(t api.Target) string {
+	if t.Name != "" {
+		return t.Name
+	}
+	app, _ := t.Settings["app"].(string)
+	return app
+}
+
+// targetNames is the targets' names, each on one line, joined by commas.
+func targetNames(targets []api.Target) string {
+	names := make([]string, len(targets))
+	for i, t := range targets {
+		names[i] = oneLine(appName(t))
+	}
+	return strings.Join(names, ", ")
+}
+
+// deployFlyApps runs fly for each app in turn, once every check has passed for all of them and the open items are
+// settled. Before each, it repeats the local checks. The first fly that fails ends the run with its status, so the apps
+// after it stay as they were.
+func deployFlyApps(ctx context.Context, s *session, d *deployment, yes bool) int {
 	for _, check := range deployChecks {
 		if err := check(ctx, d); err != nil {
 			return fail(s.env, err)
 		}
 	}
 
-	next, err := s.client.NextDeploy(ctx, repo)
+	next, err := s.client.NextDeploy(ctx, d.repository.Name)
 	if err != nil {
-		return s.repoFailure(err, repo, "")
+		return s.repoFailure(err, d.repository.Name, "")
 	}
 	if !s.settleOpenItems(next.BeforeDeploying, nil, yes) {
 		fmt.Fprintln(s.env.Stderr, msgNotDeployed)
 		return 1
 	}
-	if err := checkUnchanged(ctx, d); err != nil {
-		return fail(s.env, err)
-	}
-	return s.flyDeploy(ctx, d)
-}
-
-// trackedPlatforms reports whether any target cadre tracks is on Fly, and whether any is on Vercel. A repo with
-// neither takes the Fly path, which says how to connect an app.
-func trackedPlatforms(targets []api.Target) (onFly, onVercel bool) {
-	for _, t := range targets {
-		if t.Tracked {
-			onFly = onFly || t.Platform == "fly"
-			onVercel = onVercel || t.Platform == "vercel"
+	for _, app := range d.flyApps {
+		if err := checkUnchanged(ctx, d); err != nil {
+			return fail(s.env, err)
+		}
+		if code := s.flyDeploy(ctx, d, app); code != 0 {
+			return code
 		}
 	}
-	return onFly, onVercel
+	return 0
 }
 
 // checkCheckout finds the checkout, and holds its origin to the repo the person named.
@@ -176,32 +251,42 @@ func checkOrigin(ctx context.Context, d *deployment) error {
 	return nil
 }
 
-// findApp reads the fly target's app. A fly target without one is no better than no fly target. With no fly target, the
-// repo has no target cadre tracks, as a Vercel one takes the Vercel path, so the refusal names both ways to connect one.
-func findApp(_ context.Context, d *deployment) error {
-	name, targets := d.repository.Name, d.repository.Targets
-	i := slices.IndexFunc(targets, func(t api.Target) bool { return t.Platform == "fly" })
-	if i < 0 {
+// findApps reads each target's Fly app and picks its config, each app in full before the next. A target without a Fly
+// app is no better than none. With no target, the repo has none cadre tracks, as a Vercel one takes the Vercel path, so
+// the refusal names both ways to connect one.
+func findApps(ctx context.Context, d *deployment) error {
+	name := d.repository.Name
+	if len(d.targets) == 0 {
 		return fmt.Errorf("%s has no app cadre can deploy. Connect one with cadre repo set %s --fly-app <app>, or --vercel-project <id> --name <app> --vercel-dir <folder>.",
 			name, name)
 	}
-	d.settings = targets[i].Settings
-	d.statusURL = targets[i].StatusURL
-	app, _ := d.settings["app"].(string)
-	if app == "" {
-		return fmt.Errorf("%s has no Fly app. Connect it with cadre repo set %s --fly-app <app>.", name, name)
+	for _, t := range d.targets {
+		app := flyAppOf(t)
+		if app.app == "" {
+			return fmt.Errorf("%s has no Fly app. Connect it with cadre repo set %s --fly-app <app>.", name, name)
+		}
+		if err := d.pickConfig(ctx, &app); err != nil {
+			return err
+		}
+		d.flyApps = append(d.flyApps, app)
 	}
-	d.app = app
 	return nil
 }
 
-// pickConfig takes the target's config, cleaned as git lists paths, else fly.production.toml, else fly.toml. Only a
+func flyAppOf(t api.Target) flyApp {
+	app := flyApp{name: appName(t), statusURL: t.StatusURL}
+	app.app, _ = t.Settings["app"].(string)
+	app.stored, _ = t.Settings["config"].(string)
+	return app
+}
+
+// pickConfig takes the app's stored config, cleaned as git lists paths, else fly.production.toml, else fly.toml. Only a
 // committed file counts, so an ignored one is passed over. The first committed one is the choice, and it must be on disk
 // too: without it, fly may fall back to the app's remote config.
-func pickConfig(ctx context.Context, d *deployment) error {
+func (d *deployment) pickConfig(ctx context.Context, app *flyApp) error {
 	candidates, missing := []string{"fly.production.toml", "fly.toml"}, "Neither fly.production.toml nor fly.toml is"
-	if stored, _ := d.settings["config"].(string); stored != "" {
-		candidates, missing = []string{filepath.Clean(stored)}, stored+" isn't"
+	if app.stored != "" {
+		candidates, missing = []string{filepath.Clean(app.stored)}, app.stored+" isn't"
 	}
 	for _, file := range candidates {
 		committed, err := d.committed(ctx, file)
@@ -209,10 +294,10 @@ func pickConfig(ctx context.Context, d *deployment) error {
 			return err
 		}
 		if committed {
-			return d.useConfig(file)
+			return d.useConfig(app, file)
 		}
 	}
-	return d.noConfig(missing)
+	return d.noConfig(*app, missing)
 }
 
 // committed reports whether file is a tracked file inside the checkout. The clean check has passed, so tracked is
@@ -225,32 +310,38 @@ func (d *deployment) committed(ctx context.Context, file string) (bool, error) {
 }
 
 // useConfig settles on a committed file, or refuses it. It never moves on to the next candidate.
-func (d *deployment) useConfig(file string) error {
+func (d *deployment) useConfig(app *flyApp, file string) error {
 	found, err := d.inCheckout(file)
 	if err != nil {
 		return err
 	}
 	if !found {
-		return d.noConfig(file + " isn't")
+		return d.noConfig(*app, file+" isn't")
 	}
-	d.config = file
+	app.config = file
 	return nil
 }
 
-func (d *deployment) noConfig(missing string) error {
-	return fmt.Errorf("%s in this checkout. Set the right file with cadre repo set %s --fly-app %s%s.",
-		missing, d.repository.Name, d.app, d.configFlags())
+// noConfig refuses the app's config with the repo set command that sets the right one. That command sets the app its
+// --name gives, else the one named after its Fly app, so it passes --name when the app's name is another.
+func (d *deployment) noConfig(app flyApp, missing string) error {
+	name := ""
+	if app.name != app.app {
+		name = " --name " + app.name
+	}
+	return fmt.Errorf("%s in this checkout. Set the right file with cadre repo set %s --fly-app %s%s%s.",
+		missing, d.repository.Name, app.app, name, app.configFlags())
 }
 
 // configFlags are what the person passes to repo set, which replaces the target, so they keep its status URL. The person
 // pastes them, so a URL that can't be quoted safely is left out for them to fill in. One that can goes before
 // --fly-config, as the sentence's full stop would stick to it at the end of a pasted command.
-func (d *deployment) configFlags() string {
+func (a flyApp) configFlags() string {
 	switch {
-	case d.statusURL == "":
+	case a.statusURL == "":
 		return " --fly-config <file>"
-	case quotable(d.statusURL):
-		return " --status-url '" + d.statusURL + "' --fly-config <file>"
+	case quotable(a.statusURL):
+		return " --status-url '" + a.statusURL + "' --fly-config <file>"
 	default:
 		return " --fly-config <file> --status-url <url> (see cadre repo show)"
 	}
@@ -378,9 +469,9 @@ func checkUnchanged(ctx context.Context, d *deployment) error {
 	return nil
 }
 
-// flyDeploy runs fly at the checkout's top level, with the commit as the image label.
-func (s *session) flyDeploy(ctx context.Context, d *deployment) int {
-	cmd := exec.CommandContext(ctx, d.fly, "deploy", "--app", d.app, "--config", d.config, "--image-label", d.commit)
+// flyDeploy runs fly for app at the checkout's top level, with the commit as the image label.
+func (s *session) flyDeploy(ctx context.Context, d *deployment, app flyApp) int {
+	cmd := exec.CommandContext(ctx, d.fly, "deploy", "--app", app.app, "--config", app.config, "--image-label", d.commit)
 	cmd.Dir = d.checkout.Dir
 	cmd.Stdin = s.env.stdin()
 	cmd.Stdout = s.progress()
@@ -388,7 +479,7 @@ func (s *session) flyDeploy(ctx context.Context, d *deployment) int {
 	if err := runOutlivingSignals(cmd); err != nil {
 		return s.flyExitCode(err)
 	}
-	s.reportDeployed(d)
+	s.reportDeployed(d, app)
 	return 0
 }
 
@@ -433,8 +524,9 @@ func (s *session) flyExitCode(err error) int {
 	return 1
 }
 
-func (s *session) reportDeployed(d *deployment) {
-	fmt.Fprintf(s.progress(), "Deployed %s to %s. Cadre shows it on its next check.\n", d.commit[:7], d.app)
+// reportDeployed names the Fly app that fly deployed, and with --json prints its object on a line of its own.
+func (s *session) reportDeployed(d *deployment, app flyApp) {
+	fmt.Fprintf(s.progress(), "Deployed %s to %s. Cadre shows it on its next check.\n", d.commit[:7], app.app)
 	if !s.asJSON {
 		return
 	}
@@ -443,5 +535,5 @@ func (s *session) reportDeployed(d *deployment) {
 		App    string `json:"app"`
 		Config string `json:"config"`
 		Commit string `json:"commit"`
-	}{d.repository.Name, d.app, d.config, d.commit})
+	}{d.repository.Name, app.app, app.config, d.commit})
 }
