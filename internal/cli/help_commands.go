@@ -175,14 +175,14 @@ a milestone number, such as wish-reminders/2.`,
 				name:    "repo set",
 				summary: "Say where a repo deploys",
 				forms: []string{
-					"<repo> --fly-app <app> [--fly-config <file>] [--status-url <u>]",
-					"<repo> --fly-app <app> --name <app>",
+					"<repo> --fly-app <app> [--name <app>] [--fly-config <file>]",
 					"<repo> --vercel-project <id> --name <app> --vercel-dir <folder>",
 					"<repo> --platform <name>",
 				},
-				about: `<repo> is the repo's name in Cadre, such as shop-api. Setting a platform again
-replaces its settings, so pass --fly-app, --fly-config and --status-url each
-time. Fly apps are found through the orgs connected with cadre fly org add.
+				about: `<repo> is the repo's name in Cadre, such as shop-api. Setting an app again (the
+same name) replaces its settings, so pass --fly-app, --fly-config and
+--status-url each time, and --name when the app's name isn't its Fly app's. Fly
+apps are found through the orgs connected with cadre fly org add.
 
 A repo can have several Fly apps, each with a name that is unique in the repo.
 --fly-app names the Fly app, and the app takes its name unless --name gives
@@ -237,9 +237,9 @@ the repo's target there, when the repo has one app on it.`,
 				forms:   []string{"<repo>"},
 				about: `Prints each target's platform, the Fly org or Vercel team it is read through,
 whether cadre can track it, and its last deploy: the date in UTC and the commit.
-A Vercel target starts with its name. A line under the target gives its status
-URL, if it has one, and whether the app is live: live, not live since when, or
-not checked yet.`,
+A Vercel target starts with its name, and so does a Fly app whose name isn't its
+Fly app's. A line under the target gives its status URL, if it has one, and
+whether the app is live: live, not live since when, or not checked yet.`,
 				flags:    []helpRow{jsonFlag},
 				examples: []string{"cadre repo show shop-api"},
 			},
