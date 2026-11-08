@@ -133,7 +133,7 @@ func (v *vercelDeployment) checkApp(app vercelApp) error {
 	name, dir := oneLine(app.name), oneLine(app.dir)
 	if app.team == "" {
 		return fmt.Errorf("%s has no Vercel team in cadre. Connect it again with cadre repo set %s --vercel-project %s --name %s --vercel-dir %s",
-			name, v.repository.Name, oneLine(app.project), name, dir)
+			name, oneLine(v.repository.Name), oneLine(app.project), name, dir)
 	}
 	folder, err := v.isFolder(app.dir)
 	if err != nil {

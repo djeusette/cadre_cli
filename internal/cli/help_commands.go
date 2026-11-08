@@ -296,7 +296,7 @@ equals origin/main after a git fetch. The repo needs a Fly app, set with cadre
 repo set, and fly must be installed and signed in. With --all, the Fly apps
 deploy one at a time, by name, and the first that fails stops the ones after it.
 A signal such as Ctrl-C also stops them, before the next app. A run that stops
-part-way names each app it didn't deploy.
+part-way names each app after the one it stopped at.
 
 The config file is the one set with --fly-config, else fly.production.toml if
 it's committed, else fly.toml. That file must be committed and on disk, or it

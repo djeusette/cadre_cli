@@ -1133,6 +1133,21 @@ func TestVercelDeployJSONPrintsOneObjectPerApp(t *testing.T) {
 	}
 }
 
+// The no-team refusal names the repo as the server gave it, so that name stays on one line too.
+func TestVercelNoTeamRefusalPrintsTheRepoNameOnOneLine(t *testing.T) {
+	r := newVercelRig(t)
+	r.name = "colette-\u001b[2Japi\nFake: line"
+	r.app("admin").team = ""
+
+	code := r.deploy("--app", "admin")
+
+	want := "admin has no Vercel team in cadre. Connect it again with cadre repo set colette- [2Japi Fake: line --vercel-project prj_admin --name admin --vercel-dir apps/admin\n"
+	if code != 1 || r.h.errb.String() != want {
+		t.Errorf("code = %d, stderr %q, want %q", code, r.h.errb, want)
+	}
+	r.assertNothingRan()
+}
+
 // An app's name comes from the server, so it never reaches the terminal as anything but one line of text: not in the
 // list of apps a pick is refused with, nor in a refusal of the app.
 func TestVercelDeployPrintsAnAppNameOnOneLine(t *testing.T) {
