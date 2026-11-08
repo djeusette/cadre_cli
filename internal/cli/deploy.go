@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -159,8 +158,7 @@ func targetNames(targets []api.Target) string {
 }
 
 // deployFlyApps runs fly for each app in turn, once every check has passed for all of them and the open items are
-// settled. Before each, it repeats the local checks. The first fly that fails ends the run with its status, so the apps
-// after it stay as they were.
+// settled.
 func deployFlyApps(ctx context.Context, s *session, d *deployment, yes bool) int {
 	for _, check := range deployChecks {
 		if err := check(ctx, d); err != nil {
@@ -176,15 +174,51 @@ func deployFlyApps(ctx context.Context, s *session, d *deployment, yes bool) int
 		fmt.Fprintln(s.env.Stderr, msgNotDeployed)
 		return 1
 	}
-	for _, app := range d.flyApps {
+	return s.runFlyApps(ctx, d)
+}
+
+// runFlyApps deploys each app in turn, and repeats the local checks before each. cadre stays up through SIGINT and
+// SIGTERM until the run ends, as dying first would leave a deploy running with nobody to report how it went, and a
+// signal stops the run before the next app. The first app that is refused, fails or is stopped ends the run, so the
+// apps after it stay as they were, and once an app was tried, the run names them. A failed fly ends it with fly's
+// status.
+func (s *session) runFlyApps(ctx context.Context, d *deployment) int {
+	w := watchSignals()
+	defer w.stop()
+	for i, app := range d.flyApps {
 		if err := checkUnchanged(ctx, d); err != nil {
-			return fail(s.env, err)
-		}
-		if code := s.flyDeploy(ctx, d, app); code != 0 {
+			code := fail(s.env, err)
+			s.reportLeft(d, i)
 			return code
 		}
+		switch err := s.flyDeploy(ctx, d, app, w); {
+		case errors.Is(err, errStopped) && i == 0:
+			fmt.Fprintln(s.env.Stderr, msgNotDeployed)
+			return 1
+		case errors.Is(err, errStopped):
+			s.reportLeft(d, i)
+			return 1
+		case err != nil:
+			code := s.flyExitCode(err)
+			s.reportLeft(d, i+1)
+			return code
+		}
+		s.reportDeployed(d, app)
 	}
 	return 0
+}
+
+// reportLeft names each app from d.flyApps[from] on, which the run stopped before, with the command that deploys it.
+// With from at 0 no app was tried, and what stopped the run has said so.
+func (s *session) reportLeft(d *deployment, from int) {
+	if from == 0 {
+		return
+	}
+	repo := oneLine(d.repository.Name)
+	for _, app := range d.flyApps[from:] {
+		name := oneLine(app.name)
+		fmt.Fprintf(s.env.Stderr, "%s wasn't deployed. Deploy it with cadre deploy %s --app %s.\n", name, repo, name)
+	}
 }
 
 // checkCheckout finds the checkout, and holds its origin to the repo the person named.
@@ -469,38 +503,19 @@ func checkUnchanged(ctx context.Context, d *deployment) error {
 	return nil
 }
 
-// flyDeploy runs fly for app at the checkout's top level, with the commit as the image label.
-func (s *session) flyDeploy(ctx context.Context, d *deployment, app flyApp) int {
+// flyDeploy runs fly for app at the checkout's top level, with the commit as the image label, and waits for it. It runs
+// under w, so a SIGTERM reaches it, and a signal that came first keeps it from starting, as errStopped.
+func (s *session) flyDeploy(ctx context.Context, d *deployment, app flyApp, w *signalWatch) error {
 	cmd := exec.CommandContext(ctx, d.fly, "deploy", "--app", app.app, "--config", app.config, "--image-label", d.commit)
 	cmd.Dir = d.checkout.Dir
 	cmd.Stdin = s.env.stdin()
 	cmd.Stdout = s.progress()
 	cmd.Stderr = s.env.Stderr
-	if err := runOutlivingSignals(cmd); err != nil {
-		return s.flyExitCode(err)
-	}
-	s.reportDeployed(d, app)
-	return 0
+	return w.runOne(cmd)
 }
 
-// runOutlivingSignals runs cmd with cadre staying up through SIGINT and SIGTERM until it ends, so the status is cmd's.
-// Dying first would leave a deploy running with nobody to report how it went.
-func runOutlivingSignals(cmd *exec.Cmd) error {
-	sigs := make(chan os.Signal, 2)
-	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sigs)
-
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	done := make(chan struct{})
-	defer close(done)
-	go forwardSignals(sigs, done, func(sig os.Signal) { _ = cmd.Process.Signal(sig) })
-	return cmd.Wait()
-}
-
-// forwardSignals passes each SIGTERM on sigs to forward, as fly wouldn't otherwise receive one, until done is closed.
-// SIGINT never goes through: the terminal sends it to the whole group, and a second one would make fly abort.
+// forwardSignals passes each SIGTERM on sigs to forward, as fly or vercel wouldn't otherwise receive one, until done is
+// closed. SIGINT never goes through: the terminal sends it to the whole group, and a second one would make fly abort.
 func forwardSignals(sigs <-chan os.Signal, done <-chan struct{}, forward func(os.Signal)) {
 	for {
 		select {

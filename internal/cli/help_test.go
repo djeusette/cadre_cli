@@ -257,6 +257,7 @@ func TestSeveralAppsAreDocumentedInStep(t *testing.T) {
 			"A repo with several needs --app <name> for one of them, or --all for every one.",
 			"--all refuses a repo with apps on more than one platform.",
 			"With --all, the Fly apps deploy one at a time, by name, and the first that fails stops the ones after it.",
+			"A signal such as Ctrl-C also stops them, before the next app. A run that stops part-way names each app it didn't deploy.",
 			"--app builds and promotes that app alone.",
 		} {
 			if !strings.Contains(said, want) {
