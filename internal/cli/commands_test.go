@@ -1487,9 +1487,9 @@ func TestPrLinkNotSignedIn(t *testing.T) {
 const repoShowBody = `{"name":"colette-api","github_full_name":"colette-club/colette-api","targets":[{"platform":"fly","settings":{"app":"colette-api-prod"},"tracked":true,"account":"colette","last_deploy":{"commit":"4370c48d1f0e9a3b5c6d7e8f90a1b2c3d4e5f607","deployed_at":"2026-11-03T14:05:00Z"}},{"platform":"render","settings":{},"tracked":false,"account":null}]}`
 
 func TestRepoSetFly(t *testing.T) {
-	var got linkRequest
+	var requests []linkRequest
 	body := `{"repo":"colette-api","platform":"fly","settings":{"app":"colette-api-prod"},"tracked":true,"account":"colette"}`
-	srv := linkServer(t, 200, body, &got)
+	srv := severalAppsServer(t, body, flyShow("colette-api-prod"), &requests)
 	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
 
 	if code := cli.Run([]string{"repo", "set", "colette-api", "--fly-app", "colette-api-prod"}, h.deps); code != 0 {
@@ -1498,6 +1498,10 @@ func TestRepoSetFly(t *testing.T) {
 	if want := "Connected colette-api to the Fly app colette-api-prod, in the colette org. It deploys with fly.production.toml, else fly.toml.\n"; h.out.String() != want {
 		t.Errorf("stdout = %q", h.out)
 	}
+	if len(requests) == 0 {
+		t.Fatal("no request")
+	}
+	got := requests[0]
 	settings, _ := got.body["settings"].(map[string]any)
 	if got.method != "PUT" || got.path != "/api/repositories/colette-api/targets/fly" || got.auth != "Bearer cadre_abc" || len(got.body) != 1 || len(settings) != 1 || settings["app"] != "colette-api-prod" {
 		t.Errorf("request = %+v", got)
@@ -1505,9 +1509,9 @@ func TestRepoSetFly(t *testing.T) {
 }
 
 func TestRepoSetFlyConfig(t *testing.T) {
-	var got linkRequest
+	var requests []linkRequest
 	body := `{"repo":"colette-api","platform":"fly","settings":{"app":"colette-api-prod","config":"fly.staging.toml"},"tracked":true,"account":"colette"}`
-	srv := linkServer(t, 200, body, &got)
+	srv := severalAppsServer(t, body, flyShow("colette-api-prod"), &requests)
 	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
 
 	args := []string{"repo", "set", "colette-api", "--fly-app", "colette-api-prod", "--fly-config", "fly.staging.toml"}
@@ -1517,6 +1521,10 @@ func TestRepoSetFlyConfig(t *testing.T) {
 	if want := "Connected colette-api to the Fly app colette-api-prod, in the colette org. It deploys with fly.staging.toml.\n"; h.out.String() != want {
 		t.Errorf("stdout = %q", h.out)
 	}
+	if len(requests) == 0 {
+		t.Fatal("no request")
+	}
+	got := requests[0]
 	settings, _ := got.body["settings"].(map[string]any)
 	if got.method != "PUT" || got.path != "/api/repositories/colette-api/targets/fly" || len(got.body) != 1 || len(settings) != 2 || settings["app"] != "colette-api-prod" || settings["config"] != "fly.staging.toml" {
 		t.Errorf("request = %+v", got)
@@ -2439,7 +2447,7 @@ func TestRepoSetVercelUsage(t *testing.T) {
 		{"repo", "set", "x", "--vercel-dir", "apps/linear"},
 		{"repo", "set", "x", "--name", "linear", "--vercel-dir", "apps/linear"},
 		{"repo", "set", "x", "--vercel-project"},
-		{"repo", "set", "x", "--fly-app", "a", "--name", "linear"},
+		{"repo", "set", "x", "--platform", "render", "--name", "linear"},
 		{"repo", "set", "x", "--platform", "render", "--vercel-dir", "apps/linear"},
 		append(slices.Clone(vercelSet), "--fly-app", "x"),
 		append(slices.Clone(vercelSet), "--platform", "render"),
@@ -2579,16 +2587,197 @@ func TestRepoSetVercelWithoutDirOrProjectPrintsNoNil(t *testing.T) {
 	}
 }
 
-func TestRepoUnsetVercelNeedsAName(t *testing.T) {
+func TestRepoUnsetVercelWithoutANameIsLeftToTheServer(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, `{"repo":"colette-agents","platform":"vercel"}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "unset", "colette-agents", "--platform", "vercel"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if got.method != "DELETE" || got.path != "/api/repositories/colette-agents/targets/vercel" || got.query != "" {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+// severalAppsServer answers a PUT with put and a GET with show, and keeps every request it got.
+func severalAppsServer(t *testing.T, put, show string, got *[]linkRequest) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		req := linkRequest{method: r.Method, path: r.URL.EscapedPath(), auth: r.Header.Get("Authorization"), query: r.URL.RawQuery}
+		if len(b) > 0 {
+			if err := json.Unmarshal(b, &req.body); err != nil {
+				t.Errorf("body %q: %v", b, err)
+			}
+		}
+		*got = append(*got, req)
+		if r.Method == http.MethodGet {
+			writeJSON(w, 200, show)
+			return
+		}
+		writeJSON(w, 200, put)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+const flyAppPut = `{"repo":"colette-api","platform":"fly","name":"other-app","settings":{"app":"other-app"},"tracked":true,"account":"colette"}`
+
+func flyShow(names ...string) string {
+	targets := make([]string, len(names))
+	for i, n := range names {
+		targets[i] = `{"platform":"fly","name":"` + n + `","settings":{"app":"` + n + `"},"tracked":true,"account":"colette"}`
+	}
+	return `{"name":"colette-api","github_full_name":"colette-club/colette-api","targets":[` + strings.Join(targets, ",") + `]}`
+}
+
+func TestRepoSetNamesAFlyApp(t *testing.T) {
+	var got []linkRequest
+	srv := severalAppsServer(t, flyAppPut, flyShow("api"), &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "set", "colette-api", "--fly-app", "other-app", "--name", "api"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if len(got) != 1 || got[0].method != "PUT" || got[0].path != "/api/repositories/colette-api/targets/fly" || got[0].body["name"] != "api" {
+		t.Errorf("requests = %+v", got)
+	}
+}
+
+func TestRepoSetSaysItAddedAnApp(t *testing.T) {
+	var got []linkRequest
+	srv := severalAppsServer(t, flyAppPut, flyShow("other-app", "colette-api-prod"), &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "set", "colette-api", "--fly-app", "other-app"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	want := "Connected colette-api to the Fly app other-app, in the colette org. It deploys with fly.production.toml, else fly.toml.\n" +
+		"colette-api now has 2 apps: colette-api-prod, other-app. To move an app instead, pass --name <app>.\n"
+	if h.out.String() != want {
+		t.Errorf("stdout = %q, want %q", h.out, want)
+	}
+	if len(got) != 2 || got[1].method != "GET" || got[1].path != "/api/repositories/colette-api" {
+		t.Errorf("requests = %+v", got)
+	}
+}
+
+func TestRepoSetSaysNothingForTheFirstApp(t *testing.T) {
+	var got []linkRequest
+	srv := severalAppsServer(t, flyAppPut, flyShow("other-app"), &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "set", "colette-api", "--fly-app", "other-app"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Connected colette-api to the Fly app other-app, in the colette org. It deploys with fly.production.toml, else fly.toml.\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+}
+
+func TestRepoSetNamedAppReadsNothingBack(t *testing.T) {
+	var got []linkRequest
+	srv := severalAppsServer(t, flyAppPut, flyShow("a", "b"), &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "set", "colette-api", "--fly-app", "other-app", "--name", "b"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if strings.Contains(h.out.String(), "now has") || len(got) != 1 {
+		t.Errorf("stdout = %q, requests = %+v", h.out, got)
+	}
+}
+
+func TestRepoSetKeepsItsSuccessWhenTheFollowUpReadFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			writeJSON(w, 500, `oops`)
+			return
+		}
+		writeJSON(w, 200, flyAppPut)
+	}))
+	t.Cleanup(srv.Close)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "set", "colette-api", "--fly-app", "other-app"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Connected colette-api to the Fly app other-app, in the colette org. It deploys with fly.production.toml, else fly.toml.\n"; h.out.String() != want || h.errb.Len() != 0 {
+		t.Errorf("stdout = %q, stderr = %q", h.out, h.errb)
+	}
+}
+
+func TestRepoSetAddsNothingToItsJSON(t *testing.T) {
+	var got []linkRequest
+	srv := severalAppsServer(t, flyAppPut, flyShow("other-app", "colette-api-prod"), &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "set", "colette-api", "--fly-app", "other-app", "--json"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if h.out.String() != flyAppPut || len(got) != 1 {
+		t.Errorf("stdout = %q, requests = %+v", h.out, got)
+	}
+}
+
+func TestRepoUnsetByNameAlone(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, `{"repo":"kinfield","platform":"fly"}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "unset", "kinfield", "--name", "kinfield-family"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Removed kinfield's Fly target kinfield-family.\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+	if got.method != "DELETE" || got.path != "/api/repositories/kinfield/apps/kinfield-family" || got.query != "" || got.auth != "Bearer cadre_abc" {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestRepoUnsetNeedsANameOrAPlatform(t *testing.T) {
 	var got linkRequest
 	srv := linkServer(t, 200, `{}`, &got)
-	for _, p := range []string{"vercel", "Vercel", "VERCEL"} {
-		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
-		if code := cli.Run([]string{"repo", "unset", "colette-agents", "--platform", p}, h.deps); code != 2 || h.errb.String() != usageRepoUnset {
-			t.Errorf("%s: code = %d, stderr %q", p, code, h.errb)
-		}
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "unset", "kinfield"}, h.deps); code != 2 || h.errb.String() != usageRepoUnset {
+		t.Errorf("code = %d, stderr %q", code, h.errb)
 	}
 	if got.calls != 0 {
 		t.Errorf("the server was called: %+v", got)
+	}
+}
+
+func TestRepoUnsetWithNoSuchApp(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 404, `{"error":"target_not_found"}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "unset", "kinfield", "--name", "linear"}, h.deps); code != 1 {
+		t.Errorf("code = %d", code)
+	}
+	if want := "kinfield has no app linear.\n"; h.errb.String() != want {
+		t.Errorf("stderr = %q, want %q", h.errb, want)
+	}
+}
+
+func TestRepoShowNamesAnAppWhoseNameDiffers(t *testing.T) {
+	var got linkRequest
+	body := `{"name":"colette-api","github_full_name":"colette-club/colette-api","targets":[` +
+		`{"platform":"fly","name":"api","settings":{"app":"colette-api-prod"},"tracked":true},` +
+		`{"platform":"fly","name":"other-app","settings":{"app":"other-app"},"tracked":true}]}`
+	srv := linkServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "show", "colette-api"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	want := "colette-api (colette-club/colette-api)\n" +
+		"  Fly  api, app colette-api-prod, no deploy seen yet\n" +
+		"  Fly  app other-app, no deploy seen yet\n"
+	if h.out.String() != want {
+		t.Errorf("stdout = %q\nwant %q", h.out, want)
 	}
 }

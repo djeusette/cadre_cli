@@ -176,12 +176,18 @@ a milestone number, such as wish-reminders/2.`,
 				summary: "Say where a repo deploys",
 				forms: []string{
 					"<repo> --fly-app <app> [--fly-config <file>] [--status-url <u>]",
+					"<repo> --fly-app <app> --name <app>",
 					"<repo> --vercel-project <id> --name <app> --vercel-dir <folder>",
 					"<repo> --platform <name>",
 				},
 				about: `<repo> is the repo's name in Cadre, such as shop-api. Setting a platform again
 replaces its settings, so pass --fly-app, --fly-config and --status-url each
 time. Fly apps are found through the orgs connected with cadre fly org add.
+
+A repo can have several Fly apps, each with a name that is unique in the repo.
+--fly-app names the Fly app, and the app takes its name unless --name gives
+another. Set a name again to change that app; --fly-app with another name adds
+an app, and says so.
 
 A repo can have several Vercel apps, one per --name. Give each its project id
 and the folder it builds from, and set it again to change it. Vercel projects
@@ -191,7 +197,7 @@ are found through the teams connected with cadre vercel team add.`,
 					{"--fly-config <file>", "The Fly config file it deploys with, for the whole team"},
 					{"--status-url <url>", "An https URL cadre checks to tell if the app is live"},
 					{"--vercel-project <id>", "Connect the repo to a Vercel project cadre tracks"},
-					{"--name <app>", "The Vercel app's name, such as linear. Vercel only"},
+					{"--name <app>", "The app's name: required on Vercel, else the Fly app's"},
 					{"--vercel-dir <folder>", "The folder the app deploys from. Vercel only"},
 					{"--platform <name>", "Name any other platform, which shows as not tracked"},
 					jsonFlag,
@@ -199,6 +205,7 @@ are found through the teams connected with cadre vercel team add.`,
 				examples: []string{
 					"cadre repo set shop-api --fly-app shop-api-prod",
 					"cadre repo set shop-api --fly-app shop-api-prod --fly-config fly.staging.toml",
+					"cadre repo set shop-api --fly-app shop-api-worker --name worker",
 					"cadre repo set shop-api --fly-app shop-api --status-url https://app.test/up",
 					"cadre repo set shop-api --vercel-project prj_1 --name site --vercel-dir web",
 					"cadre repo set shop-site --platform render",
@@ -207,15 +214,21 @@ are found through the teams connected with cadre vercel team add.`,
 			{
 				name:    "repo unset",
 				summary: "Remove a repo's deploy target",
-				forms:   []string{"<repo> --platform <name> [--name <app>]"},
+				forms: []string{
+					"<repo> --name <app>",
+					"<repo> --platform <name> [--name <app>]",
+				},
+				about: `--name alone removes that app, whatever its platform. --platform alone removes
+the repo's target there, when the repo has one app on it.`,
 				flags: []helpRow{
-					{"--platform <name>", "The platform to remove the target from. Required"},
-					{"--name <app>", "Which Vercel app to remove. Required for Vercel"},
+					{"--name <app>", "The app to remove. Required unless --platform is given"},
+					{"--platform <name>", "The platform to remove the target from"},
 					jsonFlag,
 				},
 				examples: []string{
 					"cadre repo unset shop-site --platform render",
 					"cadre repo unset shop-api --platform vercel --name site",
+					"cadre repo unset shop-api --name worker",
 				},
 			},
 			{

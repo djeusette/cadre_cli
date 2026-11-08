@@ -911,6 +911,38 @@ func TestUnsetTargetWithoutANameSendsNoQuery(t *testing.T) {
 	}
 }
 
+func TestUnsetAppDeletesItByName(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.EscapedPath() != "/api/repositories/kinfield/apps/linear%20app" {
+			t.Errorf("bad request: %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, `{"repo":"kinfield","platform":"fly"}`)
+	})
+	got, err := c.UnsetApp(context.Background(), "kinfield", "linear app")
+	if err != nil || got.Repo != "kinfield" || got.Platform != "fly" || string(got.Raw) != `{"repo":"kinfield","platform":"fly"}` {
+		t.Errorf("got %+v, err %v", got, err)
+	}
+}
+
+func TestUnsetAppStatuses(t *testing.T) {
+	cases := []struct {
+		status int
+		body   string
+		check  func(error) bool
+	}{
+		{404, `{"error":"repository_not_found"}`, func(err error) bool { return errors.Is(err, api.ErrRepositoryNotFound) }},
+		{404, `{"error":"target_not_found"}`, func(err error) bool { return errors.Is(err, api.ErrTargetNotFound) }},
+		{401, `{"error":"unauthorized"}`, func(err error) bool { return errors.Is(err, api.ErrUnauthorized) }},
+	}
+	for _, tc := range cases {
+		c := newClient(t, reply(tc.status, tc.body))
+		if _, err := c.UnsetApp(context.Background(), "kinfield", "linear"); !tc.check(err) {
+			t.Errorf("%d %s: err = %v", tc.status, tc.body, err)
+		}
+	}
+}
+
 func TestShowRepositoryReadsAVercelTargetsName(t *testing.T) {
 	c := newClient(t, reply(200, `{"name":"colette-agents","github_full_name":"colette-club/colette-agents","targets":[{"platform":"vercel","name":"linear","settings":{},"tracked":true},{"platform":"fly","name":null,"settings":{},"tracked":true}]}`))
 	got, err := c.ShowRepository(context.Background(), "colette-agents")
