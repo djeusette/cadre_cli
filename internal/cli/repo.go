@@ -126,7 +126,7 @@ func setTarget(ctx context.Context, s *session, repo, platform, name string, set
 	case target.Tracked:
 		fmt.Fprintln(s.env.Stdout, connectedLine(target))
 		if platform == "fly" && name == "" {
-			s.sayFurtherFlyApps(ctx, repo)
+			s.sayFurtherApp(ctx, repo)
 		}
 	default:
 		fmt.Fprintf(s.env.Stdout, "cadre can't read %s deploys yet, so %s shows as not tracked.\n", displayName(target.Platform), target.Repo)
@@ -134,17 +134,19 @@ func setTarget(ctx context.Context, s *session, repo, platform, name string, set
 	return 0
 }
 
-// sayFurtherFlyApps says that the repo now has several Fly apps, and how to move one instead of adding another. The
-// set already happened, so a failed read of the repo says nothing rather than failing it.
-func (s *session) sayFurtherFlyApps(ctx context.Context, repo string) {
+// sayFurtherApp says that the repo now has several apps, and how to move one instead of adding another. Two Fly apps
+// trigger it, but it counts and lists every app of the repo. The set already happened, so a failed read of the repo
+// says nothing rather than failing it.
+func (s *session) sayFurtherApp(ctx context.Context, repo string) {
 	shown, err := s.client.ShowRepository(ctx, repo)
 	if err != nil {
 		return
 	}
-	apps := slices.DeleteFunc(slices.Clone(shown.Targets), func(t api.Target) bool { return t.Platform != "fly" })
-	if len(apps) < 2 {
+	flyApps := slices.DeleteFunc(slices.Clone(shown.Targets), func(t api.Target) bool { return t.Platform != "fly" })
+	if len(flyApps) < 2 {
 		return
 	}
+	apps := slices.Clone(shown.Targets)
 	slices.SortFunc(apps, func(a, b api.Target) int { return strings.Compare(appName(a), appName(b)) })
 	fmt.Fprintf(s.env.Stdout, "%s now has %d apps: %s. To move an app instead, pass --name <app>.\n", repo, len(apps), targetNames(apps))
 }

@@ -2781,3 +2781,37 @@ func TestRepoShowNamesAnAppWhoseNameDiffers(t *testing.T) {
 		t.Errorf("stdout = %q\nwant %q", h.out, want)
 	}
 }
+
+const vercelShowTarget = `{"platform":"vercel","name":"linear","settings":{"project":"prj_1","dir":"apps/linear"},"tracked":true,"account":"colette-club"}`
+
+func flyShowWithVercel(names ...string) string {
+	show := flyShow(names...)
+	return strings.Replace(show, `"targets":[`, `"targets":[`+vercelShowTarget+`,`, 1)
+}
+
+func TestRepoSetCountsEveryAppOfTheRepo(t *testing.T) {
+	var got []linkRequest
+	srv := severalAppsServer(t, flyAppPut, flyShowWithVercel("other-app", "colette-api-prod"), &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "set", "colette-api", "--fly-app", "other-app"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	want := "colette-api now has 3 apps: colette-api-prod, linear, other-app. To move an app instead, pass --name <app>.\n"
+	if !strings.HasSuffix(h.out.String(), "\n"+want) {
+		t.Errorf("stdout = %q, want it to end with %q", h.out, want)
+	}
+}
+
+func TestRepoSetSaysNothingForOneFlyAppBesideAVercelApp(t *testing.T) {
+	var got []linkRequest
+	srv := severalAppsServer(t, flyAppPut, flyShowWithVercel("other-app"), &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "set", "colette-api", "--fly-app", "other-app"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if strings.Contains(h.out.String(), "now has") {
+		t.Errorf("stdout = %q", h.out)
+	}
+}
