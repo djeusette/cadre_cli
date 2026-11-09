@@ -1400,15 +1400,15 @@ func TestPrLinkApp(t *testing.T) {
 	}
 }
 
-func TestPrLinkLeavesAppOutWhenEmpty(t *testing.T) {
+func TestPrLinkAppJSON(t *testing.T) {
 	var got linkRequest
-	srv := linkServer(t, 200, linkedBody, &got)
+	srv := linkServer(t, 200, linkedAppBody, &got)
 	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
 
-	if code := cli.Run([]string{"pr", "link", prURL, "wish-reminders/2"}, h.deps); code != 0 {
-		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	if code := cli.Run([]string{"pr", "link", prURL, "live-scores/2", "--app", "api", "--json"}, h.deps); code != 0 || h.out.String() != linkedAppBody {
+		t.Errorf("code = %d, stdout = %q, stderr %q", code, h.out, h.errb)
 	}
-	if len(got.body) != 2 {
+	if got.body["app"] != "api" {
 		t.Errorf("body = %v", got.body)
 	}
 }
@@ -1417,6 +1417,7 @@ func TestPrLinkAppIsAUsageError(t *testing.T) {
 	var got linkRequest
 	srv := linkServer(t, 200, linkedAppBody, &got)
 	cases := [][]string{
+		{"pr", "link", "--app", "api"},
 		{"pr", "link", prURL, "--app", "api", "--none"},
 		{"pr", "link", prURL, "live-scores/2", "--app"},
 		{"pr", "link", prURL, "live-scores/2", "--app="},

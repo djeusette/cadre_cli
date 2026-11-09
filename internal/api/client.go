@@ -202,6 +202,7 @@ type ArchivedProject struct {
 }
 
 // Linked is a pull request after a link or an unlink. Milestone and ProjectURL are nil once it is unlinked.
+// App is nil when the pull request names no app.
 // Raw holds the response body as received.
 type Linked struct {
 	Repo       string  `json:"repo"`
@@ -426,9 +427,9 @@ func (c *Client) setArchived(ctx context.Context, slug, action string) (Archived
 }
 
 // LinkPullRequest links the pull request at prURL to milestone, written <project>/<n>, or unlinks it when milestone
-// is nil. A non-empty app names the step of the milestone's repo the pull request is for. The server reads the pull request from GitHub first. It returns ErrMilestoneNotFound,
-// ErrPullRequestNotFound, ErrGitHubNotConnected, ErrGitHubUnreachable, ErrUnauthorized or a *ValidationError when the
-// server refuses it.
+// is nil. A non-empty app names the step of the milestone's repo the pull request is for. The server reads the pull
+// request from GitHub first. It returns ErrMilestoneNotFound, ErrPullRequestNotFound, ErrGitHubNotConnected,
+// ErrGitHubUnreachable, ErrUnauthorized or a *ValidationError when the server refuses it.
 func (c *Client) LinkPullRequest(ctx context.Context, prURL string, milestone *string, app string) (Linked, error) {
 	var linked Linked
 	payload, err := json.Marshal(linkBody{URL: prURL, Milestone: milestone, App: app})

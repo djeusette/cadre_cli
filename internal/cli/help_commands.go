@@ -157,7 +157,9 @@ page.`,
 				forms:   []string{"<pr-url> <project>/<n> [--app <name>]", "<pr-url> --none"},
 				about: `<pr-url> is the pull request's GitHub URL. <project>/<n> is a project's slug and
 a milestone number, such as wish-reminders/2. The Cadre: <project>/<n> <app>
-line in a pull request's description does the same as --app.`,
+line in a pull request's description does the same as --app.
+That line wins at the pull request's next sync from GitHub, so an app set by
+hand changes with it.`,
 				flags: []helpRow{
 					{"--app <name>", "Link it to that app's step, by its app name in Cadre"},
 					{"--none", "Unlink the pull request from its milestone"},

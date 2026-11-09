@@ -21,9 +21,6 @@ func runPr(env Env, asJSON bool, args []string) int {
 
 func runLink(env Env, asJSON bool, args []string) int {
 	args, none := splitBoolFlag(args, "--none")
-	if len(args) == 0 {
-		return usageError(env, "pr link")
-	}
 	app, args, ok := takeFlag(args, "--app")
 	if !ok || (app != "" && none) || len(args) == 0 {
 		return usageError(env, "pr link")
