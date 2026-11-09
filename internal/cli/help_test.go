@@ -26,10 +26,10 @@ const (
 	usageSpecPull         = "Usage: cadre spec pull <project>/<n> [-o <file>]\nRun cadre help spec pull for details.\n"
 	usageSpecPush         = "Usage: cadre spec push <project>/<n> <file> [--base <version>]\nRun cadre help spec push for details.\n"
 	usagePrLink           = "Usage: cadre pr link <pr-url> <project>/<n>\n       cadre pr link <pr-url> --none\nRun cadre help pr link for details.\n"
-	usageRepoSet          = "Usage: cadre repo set <repo> --fly-app <app> [--fly-config <file>] [--status-url <u>]\n       cadre repo set <repo> --vercel-project <id> --name <app> --vercel-dir <folder>\n       cadre repo set <repo> --platform <name>\nRun cadre help repo set for details.\n"
-	usageRepoUnset        = "Usage: cadre repo unset <repo> --platform <name> [--name <app>]\nRun cadre help repo unset for details.\n"
+	usageRepoSet          = "Usage: cadre repo set <repo> --fly-app <app> [--name <app>] [--fly-config <file>]\n       cadre repo set <repo> --vercel-project <id> --name <app> --vercel-dir <folder>\n       cadre repo set <repo> --platform <name>\nRun cadre help repo set for details.\n"
+	usageRepoUnset        = "Usage: cadre repo unset <repo> --name <app>\n       cadre repo unset <repo> --platform <name> [--name <app>]\nRun cadre help repo unset for details.\n"
 	usageRepoShow         = "Usage: cadre repo show <repo>\nRun cadre help repo show for details.\n"
-	usageDeploy           = "Usage: cadre deploy <repo> [--yes]\nRun cadre help deploy for details.\n"
+	usageDeploy           = "Usage: cadre deploy <repo> [--app <name>|--all] [--yes]\nRun cadre help deploy for details.\n"
 	usageFlyOrgAdd        = "Usage: cadre fly org add <org>\nRun cadre help fly org add for details.\n"
 	usageFlyOrgRemove     = "Usage: cadre fly org remove <org>\nRun cadre help fly org remove for details.\n"
 	usageVercelTeamAdd    = "Usage: cadre vercel team add <team>\nRun cadre help vercel team add for details.\n"
@@ -231,11 +231,72 @@ func TestVercelDeployIsDocumentedInStep(t *testing.T) {
 			"runs vercel promote for each, so they go live together.",
 			"It says which commit it builds for which apps, then that it promotes them.",
 			"A failed build promotes nothing and shows what vercel printed, and a failed promotion stops the ones after it and says which apps went live.",
-			"apps on both",
 		} {
 			if !strings.Contains(said, want) {
 				t.Errorf("%s doesn't say %q", name, want)
 			}
+		}
+	}
+}
+
+// The help and the README say the same about a repo with several apps.
+func TestSeveralAppsAreDocumentedInStep(t *testing.T) {
+	srv, _ := helpServer(t)
+	h := newHarness(t, srv, nil)
+	if code := cli.Run([]string{"help", "deploy"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, text := range map[string]string{"help": h.out.String(), "README": strings.ReplaceAll(string(readme), "`", "")} {
+		said := strings.Join(strings.Fields(text), " ")
+		for _, want := range []string{
+			"A repo with several needs --app <name> for one of them, or --all for every one.",
+			"--all refuses a repo with apps on more than one platform.",
+			"With --all, the Fly apps deploy one at a time, by name, and the first that fails stops the ones after it.",
+			"A signal such as Ctrl-C also stops them, before the next app. A run that stops part-way names each app after the one it stopped at.",
+			"--app builds and promotes that app alone.",
+		} {
+			if !strings.Contains(said, want) {
+				t.Errorf("%s doesn't say %q", name, want)
+			}
+		}
+		if strings.Contains(said, "apps on both") {
+			t.Errorf("%s still says a repo with apps on both platforms is refused", name)
+		}
+	}
+}
+
+// The help and the README say the same about an app's name: setting it again replaces that app, and repo show starts
+// the line of a Fly app named other than its Fly app with its name.
+func TestAppNamesAreDocumentedInStep(t *testing.T) {
+	srv, _ := helpServer(t)
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	said := func(text string) string { return strings.Join(strings.Fields(strings.ReplaceAll(text, "`", "")), " ") }
+	const replaces = "Setting an app again (the same name) replaces its settings, so pass --fly-app, --fly-config and --status-url each time, and --name when the app's name isn't its Fly app's"
+	const startsWithName = "Vercel target starts with its name, and so does a Fly app whose name isn't its Fly app's"
+
+	for name, tc := range map[string]struct {
+		text string
+		want []string
+	}{
+		"repo set help":  {helpFor(t, srv, "help", "repo", "set"), []string{replaces}},
+		"repo show help": {helpFor(t, srv, "help", "repo", "show"), []string{startsWithName}},
+		"README":         {string(readme), []string{replaces, startsWithName}},
+	} {
+		for _, want := range tc.want {
+			if !strings.Contains(said(tc.text), want) {
+				t.Errorf("%s doesn't say %q", name, want)
+			}
+		}
+		if strings.Contains(said(tc.text), "Setting a platform again") {
+			t.Errorf("%s still says setting a platform again replaces its settings", name)
 		}
 	}
 }

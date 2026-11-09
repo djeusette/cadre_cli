@@ -175,13 +175,19 @@ a milestone number, such as wish-reminders/2.`,
 				name:    "repo set",
 				summary: "Say where a repo deploys",
 				forms: []string{
-					"<repo> --fly-app <app> [--fly-config <file>] [--status-url <u>]",
+					"<repo> --fly-app <app> [--name <app>] [--fly-config <file>]",
 					"<repo> --vercel-project <id> --name <app> --vercel-dir <folder>",
 					"<repo> --platform <name>",
 				},
-				about: `<repo> is the repo's name in Cadre, such as shop-api. Setting a platform again
-replaces its settings, so pass --fly-app, --fly-config and --status-url each
-time. Fly apps are found through the orgs connected with cadre fly org add.
+				about: `<repo> is the repo's name in Cadre, such as shop-api. Setting an app again (the
+same name) replaces its settings, so pass --fly-app, --fly-config and
+--status-url each time, and --name when the app's name isn't its Fly app's. Fly
+apps are found through the orgs connected with cadre fly org add.
+
+A repo can have several Fly apps, each with a name that is unique in the repo.
+--fly-app names the Fly app, and the app takes its name unless --name gives
+another. Set a name again to change that app; --fly-app with another name adds
+an app, and says so.
 
 A repo can have several Vercel apps, one per --name. Give each its project id
 and the folder it builds from, and set it again to change it. Vercel projects
@@ -191,7 +197,7 @@ are found through the teams connected with cadre vercel team add.`,
 					{"--fly-config <file>", "The Fly config file it deploys with, for the whole team"},
 					{"--status-url <url>", "An https URL cadre checks to tell if the app is live"},
 					{"--vercel-project <id>", "Connect the repo to a Vercel project cadre tracks"},
-					{"--name <app>", "The Vercel app's name, such as linear. Vercel only"},
+					{"--name <app>", "The app's name: required on Vercel, else the Fly app's"},
 					{"--vercel-dir <folder>", "The folder the app deploys from. Vercel only"},
 					{"--platform <name>", "Name any other platform, which shows as not tracked"},
 					jsonFlag,
@@ -199,6 +205,7 @@ are found through the teams connected with cadre vercel team add.`,
 				examples: []string{
 					"cadre repo set shop-api --fly-app shop-api-prod",
 					"cadre repo set shop-api --fly-app shop-api-prod --fly-config fly.staging.toml",
+					"cadre repo set shop-api --fly-app shop-api-worker --name worker",
 					"cadre repo set shop-api --fly-app shop-api --status-url https://app.test/up",
 					"cadre repo set shop-api --vercel-project prj_1 --name site --vercel-dir web",
 					"cadre repo set shop-site --platform render",
@@ -207,15 +214,21 @@ are found through the teams connected with cadre vercel team add.`,
 			{
 				name:    "repo unset",
 				summary: "Remove a repo's deploy target",
-				forms:   []string{"<repo> --platform <name> [--name <app>]"},
+				forms: []string{
+					"<repo> --name <app>",
+					"<repo> --platform <name> [--name <app>]",
+				},
+				about: `--name alone removes that app, whatever its platform. --platform alone removes
+the repo's target there, when the repo has one app on it.`,
 				flags: []helpRow{
-					{"--platform <name>", "The platform to remove the target from. Required"},
-					{"--name <app>", "Which Vercel app to remove. Required for Vercel"},
+					{"--name <app>", "The app to remove. Required unless --platform is given"},
+					{"--platform <name>", "The platform to remove the target from"},
 					jsonFlag,
 				},
 				examples: []string{
 					"cadre repo unset shop-site --platform render",
 					"cadre repo unset shop-api --platform vercel --name site",
+					"cadre repo unset shop-api --name worker",
 				},
 			},
 			{
@@ -224,9 +237,9 @@ are found through the teams connected with cadre vercel team add.`,
 				forms:   []string{"<repo>"},
 				about: `Prints each target's platform, the Fly org or Vercel team it is read through,
 whether cadre can track it, and its last deploy: the date in UTC and the commit.
-A Vercel target starts with its name. A line under the target gives its status
-URL, if it has one, and whether the app is live: live, not live since when, or
-not checked yet.`,
+A Vercel target starts with its name, and so does a Fly app whose name isn't its
+Fly app's. A line under the target gives its status URL, if it has one, and
+whether the app is live: live, not live since when, or not checked yet.`,
 				flags:    []helpRow{jsonFlag},
 				examples: []string{"cadre repo show shop-api"},
 			},
@@ -270,19 +283,24 @@ history. Adding a team again replaces its token.`,
 			{
 				name:    "deploy",
 				summary: "Deploy a repo's Fly or Vercel apps, from a checkout of it",
-				forms:   []string{"<repo> [--yes]"},
+				forms:   []string{"<repo> [--app <name>|--all] [--yes]"},
 				about: `<repo> is the repo's name in Cadre, such as shop-api. Run it anywhere in a
-checkout of that repo. A repo with apps on both Fly and Vercel is refused.
+checkout of that repo. A repo with one app needs no flag. A repo with several
+needs --app <name> for one of them, or --all for every one. --all refuses a
+repo with apps on more than one platform.
 
 For a Fly app, cadre runs fly deploy at the checkout's top level, with the
 commit as the image label, so Cadre can tie the deploy to it. It refuses unless
 the checkout is on main, has no uncommitted changes or untracked files, and main
 equals origin/main after a git fetch. The repo needs a Fly app, set with cadre
-repo set, and fly must be installed and signed in.
+repo set, and fly must be installed and signed in. With --all, the Fly apps
+deploy one at a time, by name, and the first that fails stops the ones after it.
+A signal such as Ctrl-C also stops them, before the next app. A run that stops
+part-way names each app after the one it stopped at.
 
 The config file is the one set with --fly-config, else fly.production.toml if
 it's committed, else fly.toml. That file must be committed and on disk, or it
-refuses.
+refuses. Every app's file is checked before the first app deploys.
 
 For Vercel apps, cadre deploys the commit the checkout is on, from any branch,
 once origin has it after a git fetch. The tree must be clean, and each app's
@@ -292,22 +310,26 @@ folder, with vercel deploy --prod --skip-domain. Once every build is ready,
 cadre runs vercel promote for each, so they go live together. It says which
 commit it builds for which apps, then that it promotes them. A failed build
 promotes nothing and shows what vercel printed, and a failed promotion stops
-the ones after it and says which apps went live. vercel must be installed and
-signed in.
+the ones after it and says which apps went live. --app builds and promotes that
+app alone. vercel must be installed and signed in.
 
-Open Before deploying items are listed, and cadre asks before going on. It asks
-the same, in one question, when the commit lacks what a Vercel app runs now.
-With nothing to read, the answer is no. If Cadre can't say what is open, nothing
-deploys. Right before fly or vercel runs, cadre checks the commit and the
-working tree again, and for Fly the branch, so a change made in the meantime
-stops the deploy.`,
+Open Before deploying items are listed, and cadre asks once, before the first
+app deploys. It asks the same, in one question, when the commit lacks what a
+Vercel app runs now. With nothing to read, the answer is no. If Cadre can't say
+what is open, nothing deploys. Right before fly or vercel runs, cadre checks the
+commit and the working tree again, and for Fly the branch, so a change made in
+the meantime stops the deploy.`,
 				flags: []helpRow{
-					{"--yes", "Go on despite open Before deploying items or what the commit lacks"},
+					{"--app <name>", "Deploy that app alone, by its name in Cadre"},
+					{"--all", "Deploy every app of the repo"},
+					{"--yes", "Go on without asking about open items or what the commit lacks"},
 					{"--json", "Print one JSON object per app deployed, and all else on stderr"},
 				},
 				examples: []string{
 					"cadre deploy shop-api",
 					"cadre deploy shop-api --yes",
+					"cadre deploy shop-api --app shop-worker",
+					"cadre deploy shop-web --all",
 				},
 			},
 		},

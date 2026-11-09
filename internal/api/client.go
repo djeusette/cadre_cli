@@ -491,7 +491,7 @@ type Repository struct {
 type Target struct {
 	Repo     string         `json:"repo"`
 	Platform string         `json:"platform"`
-	Name     string         `json:"name"` // the app's name on a platform that has several per repo, such as Vercel; empty on Fly
+	Name     string         `json:"name"` // the app's name, unique in its repo; a cadre older than increment 23 may answer null on Fly
 	Settings map[string]any `json:"settings"`
 	Tracked  bool           `json:"tracked"`
 	Account  *string        `json:"account"` // the platform account that reads it, or nil
@@ -613,6 +613,21 @@ func (c *Client) UnsetTarget(ctx context.Context, repo, platform, name string) (
 		path += "?name=" + url.QueryEscape(name)
 	}
 	status, resp, err := c.do(ctx, http.MethodDelete, path, nil)
+	if err != nil {
+		return removed, err
+	}
+	if status != http.StatusOK {
+		return removed, repositoryStatusError(status, resp)
+	}
+	removed.Raw = resp
+	return removed, c.decode(status, resp, &removed)
+}
+
+// UnsetApp removes the repo's app called name, whatever its platform. It returns ErrRepositoryNotFound,
+// ErrTargetNotFound or ErrUnauthorized when the server refuses it.
+func (c *Client) UnsetApp(ctx context.Context, repo, name string) (Unset, error) {
+	var removed Unset
+	status, resp, err := c.do(ctx, http.MethodDelete, repositoryPath(repo, "/apps/"+url.PathEscape(name)), nil)
 	if err != nil {
 		return removed, err
 	}

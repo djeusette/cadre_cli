@@ -16,8 +16,8 @@ import (
 	"syscall"
 )
 
-// errStopped is a vercel call that a caught signal kept from starting.
-var errStopped = errors.New("cadre stopped before running vercel")
+// errStopped is a vercel or fly call that a caught signal kept from starting.
+var errStopped = errors.New("cadre stopped before starting it")
 
 // buildThenPromote builds every app at once, then promotes each in name order once all are ready, so they go live
 // together on one commit however long each build took. No build output reaches the terminal unless the build fails. A
@@ -139,13 +139,13 @@ func wentLive(v *vercelDeployment, stopped int) string {
 	return appNames(v.apps[:stopped]) + " went live on " + v.commit[:7] + "."
 }
 
-// appNames is the apps' names, each on one line, joined by commas.
+// appNames is the apps' names, as joinNames gives them.
 func appNames(apps []vercelApp) string {
 	names := make([]string, len(apps))
 	for i, app := range apps {
-		names[i] = oneLine(app.name)
+		names[i] = app.name
 	}
-	return strings.Join(names, ", ")
+	return joinNames(names)
 }
 
 // reportVercelDeployed names every app on one line, and with --json prints one object per app.
@@ -219,9 +219,9 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
-// signalWatch keeps cadre up through SIGINT and SIGTERM while vercel runs, so it can say how the deploy ended. It
-// forwards each SIGTERM to every live child through forwardSignals, as vercel wouldn't otherwise receive one, and
-// remembers that a signal came, so nothing is promoted after one.
+// signalWatch keeps cadre up through SIGINT and SIGTERM while vercel or fly runs, so it can say how the deploy ended. It
+// forwards each SIGTERM to every live child through forwardSignals, as neither would otherwise receive one, and
+// remembers that a signal came, so nothing is promoted, and no further Fly app deploys, after one.
 type signalWatch struct {
 	sigs, caught chan os.Signal
 	done         chan struct{}
@@ -255,21 +255,13 @@ func (w *signalWatch) forward(sig os.Signal) {
 }
 
 // run starts every call, then waits for each, so they all run at once. A signal that comes while they start reaches
-// them once all have. A call that can't start ends with why. Right before each start, under the lock that forwarding
-// takes, it checks for a signal again: one caught since the caller last looked keeps the call from starting, as
-// errStopped.
+// them once all have. A call that can't start ends with why, and one that a signal kept from starting with errStopped.
 func (w *signalWatch) run(calls ...*vercelCall) {
 	w.mu.Lock()
 	for _, c := range calls {
-		if w.signalled() {
-			c.err = errStopped
-			continue
+		if c.err = w.start(c.cmd); c.err != nil && !errors.Is(c.err, errStopped) {
+			c.err = fmt.Errorf("Could not run vercel: %w", c.err)
 		}
-		if err := c.cmd.Start(); err != nil {
-			c.err = fmt.Errorf("Could not run vercel: %w", err)
-			continue
-		}
-		w.live = append(w.live, c.cmd)
 	}
 	w.mu.Unlock()
 
@@ -278,7 +270,37 @@ func (w *signalWatch) run(calls ...*vercelCall) {
 			c.err = c.cmd.Wait()
 		}
 	}
+	w.forgetLive()
+}
+
+// runOne runs cmd and waits for it. Its error is errStopped when a signal kept it from starting, else cmd's own.
+func (w *signalWatch) runOne(cmd *exec.Cmd) error {
 	w.mu.Lock()
-	w.live = nil
+	err := w.start(cmd)
 	w.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	defer w.forgetLive()
+	return cmd.Wait()
+}
+
+// start starts cmd and adds it to the live children a SIGTERM reaches, unless a signal came since the watch began: then
+// cmd never starts, and the error is errStopped. The caller holds w.mu, which forwarding takes too, so a signal caught
+// since the caller last looked keeps cmd from starting, and one caught once it started reaches it.
+func (w *signalWatch) start(cmd *exec.Cmd) error {
+	if w.signalled() {
+		return errStopped
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	w.live = append(w.live, cmd)
+	return nil
+}
+
+func (w *signalWatch) forgetLive() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.live = nil
 }

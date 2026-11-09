@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -9,7 +10,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -51,19 +54,21 @@ const (
 	deployQuestion = "Deploy anyway? [y/N] "
 )
 
-// fakeFly stands in for fly. Only `auth whoami` answers without logging, so any other call shows in $FAKE_FLY_LOG, with
-// the line it read from stdin.
+// fakeFly stands in for fly. Only `auth whoami` answers without logging, so any other call adds three lines to
+// $FAKE_FLY_LOG: where it ran, its arguments and the line it read from stdin. When $FAKE_FLY_LEAVES is set, each call
+// leaves that file behind, as an edit made while fly runs would.
 const fakeFly = `#!/bin/sh
 if [ "$*" = "auth whoami" ]; then
   echo "ada@colette.club"
   exit "$FAKE_FLY_AUTH"
 fi
 read -r line
-echo "$PWD" > "$FAKE_FLY_LOG"
+echo "$PWD" >> "$FAKE_FLY_LOG"
 echo "$*" >> "$FAKE_FLY_LOG"
 echo "$line" >> "$FAKE_FLY_LOG"
 echo "fly output"
 echo "fly warning" >&2
+[ -n "$FAKE_FLY_LEAVES" ] && echo left > "$FAKE_FLY_LEAVES"
 exit "$FAKE_FLY_EXIT"
 `
 
@@ -76,6 +81,23 @@ trap 'echo INT > "$FAKE_FLY_LOG"; exit 8' INT
 kill -"$FAKE_FLY_SIGNAL" "$PPID"
 for i in 1 2 3 4 5 6 7 8 9 10; do /bin/sleep 0.05; done
 exit 9
+`
+
+// signallingFly logs each deploy as fakeFly does. On its first, it sends $FAKE_FLY_SIGNAL to cadre, its parent, and
+// gives cadre time to pass it on. Every deploy ends well, a SIGTERM's included.
+const signallingFly = `#!/bin/sh
+[ "$1" = auth ] && exit 0
+read -r line
+echo "$PWD" >> "$FAKE_FLY_LOG"
+echo "$*" >> "$FAKE_FLY_LOG"
+echo "$line" >> "$FAKE_FLY_LOG"
+trap 'exit 0' TERM
+if [ ! -f "$FAKE_FLY_LOG.signalled" ]; then
+  : > "$FAKE_FLY_LOG.signalled"
+  kill -"$FAKE_FLY_SIGNAL" "$PPID"
+  for i in 1 2 3 4 5 6 7 8 9 10; do /bin/sleep 0.05; done
+fi
+exit 0
 `
 
 // deployRig is a clean clone of colette-club/colette-api to deploy from, a Cadre server that answers for it, and a
@@ -92,6 +114,7 @@ type deployRig struct {
 	log            string
 
 	// What the server answers.
+	name     string // the repo's name in its answer, which next-deploy goes by
 	fullName string
 	targets  string
 	items    string
@@ -118,6 +141,7 @@ func newDeployRig(t *testing.T) *deployRig {
 		gitDir:   filepath.Join(root, "git-bin"),
 		realGit:  realGit,
 		log:      filepath.Join(root, "fly.log"),
+		name:     "colette-api",
 		fullName: "colette-club/colette-api",
 		targets:  flyTarget,
 		items:    "[]",
@@ -154,6 +178,7 @@ func (r *deployRig) isolate() {
 		"FAKE_FLY_LOG":        r.log,
 		"FAKE_FLY_AUTH":       "0",
 		"FAKE_FLY_EXIT":       "0",
+		"FAKE_FLY_LEAVES":     "",
 	} {
 		r.t.Setenv(key, value)
 	}
@@ -181,10 +206,11 @@ func (r *deployRig) startServer() {
 		case req.URL.Path == "/api/repositories/colette-api" && r.repoGone:
 			writeJSON(w, 404, `{"error":"repository_not_found"}`)
 		case req.URL.Path == "/api/repositories/colette-api":
-			writeJSON(w, 200, `{"name":"colette-api","github_full_name":"`+r.fullName+`","targets":[`+r.targets+`]}`)
-		case req.URL.Path == "/api/repositories/colette-api/next-deploy" && r.next != nil:
+			name, _ := json.Marshal(r.name)
+			writeJSON(w, 200, `{"name":`+string(name)+`,"github_full_name":"`+r.fullName+`","targets":[`+r.targets+`]}`)
+		case req.URL.Path == "/api/repositories/"+r.name+"/next-deploy" && r.next != nil:
 			r.next(w)
-		case req.URL.Path == "/api/repositories/colette-api/next-deploy":
+		case req.URL.Path == "/api/repositories/"+r.name+"/next-deploy":
 			writeJSON(w, 200, `{"repo":"colette-api","before_deploying":`+r.items+`}`)
 		default:
 			r.t.Errorf("unexpected path %s", req.URL.Path)
@@ -292,15 +318,35 @@ func (r *deployRig) deploy(flags ...string) int {
 	return cli.Run(append([]string{"deploy", "colette-api"}, flags...), r.h.deps)
 }
 
-// flyRan is where fly deploy ran, its arguments and the line it read from stdin, and fails the test when it didn't run.
+// flyRan is the first fly deploy's three lines: where it ran, its arguments and the line it read from stdin. It fails
+// the test when no fly deploy ran.
 func (r *deployRig) flyRan() (dir, args, stdin string) {
 	r.t.Helper()
 	raw, err := os.ReadFile(r.log)
 	if err != nil {
 		r.t.Fatalf("fly deploy never ran: %v", err)
 	}
-	lines := strings.SplitN(string(raw), "\n", 3)
-	return lines[0], lines[1], strings.TrimSpace(lines[2])
+	lines := strings.SplitN(string(raw), "\n", 4)
+	return lines[0], lines[1], lines[2]
+}
+
+// flyDeploys is the arguments of each fly deploy, in the order they ran, or none when fly never deployed.
+func (r *deployRig) flyDeploys() []string {
+	r.t.Helper()
+	raw, err := os.ReadFile(r.log)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	var deploys []string
+	for i, line := range strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n") {
+		if i%3 == 1 {
+			deploys = append(deploys, line)
+		}
+	}
+	return deploys
 }
 
 func (r *deployRig) assertNoDeploy() {
@@ -340,8 +386,25 @@ func (r *deployRig) gitFailing(call string) string {
 	return wrapper + string(os.PathListSeparator) + r.flyDir
 }
 
-func deployedLine(sha string) string {
-	return "Deployed " + sha[:7] + " to colette-api-prod. Cadre shows it on its next check.\n"
+// gitSignalling is a PATH whose git sends SIGINT to cadre, its parent, on one call, gives cadre time to catch it, then
+// runs that call and every other with the real git.
+func (r *deployRig) gitSignalling(call string) string {
+	r.t.Helper()
+	wrapper := filepath.Join(r.root, "git-signalling")
+	if err := os.Mkdir(wrapper, 0o755); err != nil {
+		r.t.Fatal(err)
+	}
+	script := fmt.Sprintf("#!/bin/sh\nif [ \"$*\" = '%s' ]; then\n  kill -INT \"$PPID\"\n  /bin/sleep 0.2\nfi\nexec '%s' \"$@\"\n", call, r.realGit)
+	if err := os.WriteFile(filepath.Join(wrapper, "git"), []byte(script), 0o755); err != nil {
+		r.t.Fatal(err)
+	}
+	return wrapper + string(os.PathListSeparator) + r.flyDir
+}
+
+func deployedLine(sha string) string { return deployedTo(sha, "colette-api-prod") }
+
+func deployedTo(sha, app string) string {
+	return "Deployed " + sha[:7] + " to " + app + ". Cadre shows it on its next check.\n"
 }
 
 // Each fault breaks one check of a clean rig.
@@ -1253,4 +1316,450 @@ func TestDeployNotSignedIn(t *testing.T) {
 	r.h = newHarness(t, r.srv, nil)
 
 	r.assertRefused(r.deploy(), "Not signed in. Run cadre login --url <url>.\n")
+}
+
+// A repo with two Fly apps, as kinfield has. The server lists kinfield-family first, so a pick by name shows.
+const (
+	kinfieldTarget       = `{"platform":"fly","name":"kinfield","settings":{"app":"kinfield"},"tracked":true}`
+	kinfieldFamilyTarget = `{"platform":"fly","name":"kinfield-family","settings":{"app":"kinfield-family","config":"fly.family.toml"},"tracked":true}`
+	refusedSeveral       = "colette-api has 2 apps: kinfield, kinfield-family. Pass --app <name> or --all.\n"
+	refusedMixed         = "colette-api has apps on more than one platform. Deploy each with --app <name>, in deploy order.\n"
+	familyLeft           = "kinfield-family wasn't deployed. Deploy it with cadre deploy colette-api --app kinfield-family.\n"
+)
+
+// twoFlyApps has the server answer with kinfield-family and kinfield, and commits kinfield-family's config.
+func (r *deployRig) twoFlyApps() {
+	r.t.Helper()
+	r.targets = kinfieldFamilyTarget + "," + kinfieldTarget
+	r.pushed("fly.family.toml")
+}
+
+func TestDeployRefusesARepoWithSeveralApps(t *testing.T) {
+	r := newDeployRig(t)
+	r.twoFlyApps()
+
+	r.assertRefused(r.deploy(), refusedSeveral)
+}
+
+func TestDeployOneAppOfSeveral(t *testing.T) {
+	r := newDeployRig(t)
+	r.twoFlyApps()
+	sha := r.head()
+
+	code := r.deploy("--app", "kinfield-family")
+
+	if code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+	}
+	if want := []string{"deploy --app kinfield-family --config fly.family.toml --image-label " + sha}; !slices.Equal(r.flyDeploys(), want) {
+		t.Errorf("fly deployed %q, want %q", r.flyDeploys(), want)
+	}
+	if want := "fly output\n" + deployedTo(sha, "kinfield-family"); r.h.out.String() != want {
+		t.Errorf("stdout = %q, want %q", r.h.out, want)
+	}
+}
+
+// --app takes the app's name in cadre, which fly doesn't know: fly gets the Fly app's.
+func TestDeployGoesByTheAppsNameNotFlys(t *testing.T) {
+	r := newDeployRig(t)
+	r.targets = `{"platform":"fly","name":"api","settings":{"app":"colette-api-prod"},"tracked":true}`
+	sha := r.head()
+
+	code := r.deploy("--app", "api")
+
+	if code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+	}
+	if _, args, _ := r.flyRan(); args != "deploy --app colette-api-prod --config fly.toml --image-label "+sha {
+		t.Errorf("fly ran with %q", args)
+	}
+}
+
+func TestDeployRefusesAnAppTheRepoDoesntHave(t *testing.T) {
+	r := newDeployRig(t)
+	r.twoFlyApps()
+
+	r.assertRefused(r.deploy("--app", "linear"), "colette-api has no app linear. Its apps: kinfield, kinfield-family.\n")
+}
+
+func TestDeployAllDeploysEachInTurn(t *testing.T) {
+	r := newDeployRig(t)
+	r.twoFlyApps()
+	sha := r.head()
+
+	code := r.deploy("--all")
+
+	if code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+	}
+	want := []string{
+		"deploy --app kinfield --config fly.toml --image-label " + sha,
+		"deploy --app kinfield-family --config fly.family.toml --image-label " + sha,
+	}
+	if !slices.Equal(r.flyDeploys(), want) {
+		t.Errorf("fly deployed %q, want %q", r.flyDeploys(), want)
+	}
+	if want := "fly output\n" + deployedTo(sha, "kinfield") + "fly output\n" + deployedTo(sha, "kinfield-family"); r.h.out.String() != want {
+		t.Errorf("stdout = %q, want %q", r.h.out, want)
+	}
+	if want := "fly warning\nfly warning\n"; r.h.errb.String() != want {
+		t.Errorf("stderr = %q, want only fly's", r.h.errb)
+	}
+}
+
+// The apps after the one that failed stay as they were, and the run names them.
+func TestDeployAllStopsAtTheFirstFailure(t *testing.T) {
+	r := newDeployRig(t)
+	r.twoFlyApps()
+	t.Setenv("FAKE_FLY_EXIT", "3")
+	sha := r.head()
+
+	code := r.deploy("--all")
+
+	if code != 3 {
+		t.Errorf("code = %d, want fly's 3", code)
+	}
+	if want := []string{"deploy --app kinfield --config fly.toml --image-label " + sha}; !slices.Equal(r.flyDeploys(), want) {
+		t.Errorf("fly deployed %q, want %q", r.flyDeploys(), want)
+	}
+	if r.h.out.String() != "fly output\n" {
+		t.Errorf("stdout = %q, want only fly's output", r.h.out)
+	}
+	if want := "fly warning\n" + familyLeft; r.h.errb.String() != want {
+		t.Errorf("stderr = %q, want %q", r.h.errb, want)
+	}
+}
+
+// A signal while one app deploys stops the run before the next, however that deploy ended: SIGTERM, which cadre passes
+// on to fly, and SIGINT, which it doesn't.
+func TestDeployAllStopsAfterASignal(t *testing.T) {
+	for _, sig := range []string{"INT", "TERM"} {
+		t.Run(sig, func(t *testing.T) {
+			r := newDeployRig(t)
+			r.twoFlyApps()
+			r.installFly("fly", signallingFly)
+			t.Setenv("FAKE_FLY_SIGNAL", sig)
+			sha := r.head()
+
+			code := r.deploy("--all")
+
+			if code != 1 {
+				t.Errorf("code = %d, want 1", code)
+			}
+			if want := []string{"deploy --app kinfield --config fly.toml --image-label " + sha}; !slices.Equal(r.flyDeploys(), want) {
+				t.Errorf("fly deployed %q, want %q", r.flyDeploys(), want)
+			}
+			if want := deployedTo(sha, "kinfield"); r.h.out.String() != want {
+				t.Errorf("stdout = %q, want %q", r.h.out, want)
+			}
+			if r.h.errb.String() != familyLeft {
+				t.Errorf("stderr = %q, want %q", r.h.errb, familyLeft)
+			}
+		})
+	}
+}
+
+// A signal before the first app deploys, while cadre checks the checkout again, deploys nothing.
+func TestDeployAllStopsOnASignalBeforeTheFirstApp(t *testing.T) {
+	held := make(chan os.Signal, 1) // only so that a cadre which doesn't catch the signal can't end the test binary
+	signal.Notify(held, os.Interrupt)
+	t.Cleanup(func() { signal.Stop(held) })
+	r := newDeployRig(t)
+	r.twoFlyApps()
+	r.items = openItems
+	signalling := r.gitSignalling("rev-parse HEAD")
+	r.h.deps.Stdin = &changingStdin{change: func() { t.Setenv("PATH", signalling) }, answer: strings.NewReader("y\n")}
+
+	code := r.deploy("--all")
+
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if r.h.errb.String() != refusedAnswer {
+		t.Errorf("stderr = %q, want %q", r.h.errb, refusedAnswer)
+	}
+	r.assertNoDeploy()
+}
+
+// Before the first app deploys, the refusal says all there is: every app stays as it was.
+func TestDeployAllRefusedBeforeTheFirstAppNamesNoApp(t *testing.T) {
+	r := newDeployRig(t)
+	r.twoFlyApps()
+	r.items = openItems
+	r.h.deps.Stdin = &changingStdin{change: r.untrackedFile, answer: strings.NewReader("y\n")}
+
+	code := r.deploy("--all")
+
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if r.h.errb.String() != refusedClean {
+		t.Errorf("stderr = %q, want %q", r.h.errb, refusedClean)
+	}
+	r.assertNoDeploy()
+}
+
+// The apps a stopped run names come from the server, so each one's line stays one line.
+func TestDeployNamesTheAppsLeftOnOneLine(t *testing.T) {
+	r := newDeployRig(t)
+	r.name = "colette-\u001b[2Japi\nFake: line"
+	r.targets = kinfieldTarget + `,{"platform":"fly","name":"kinfield-\u001b[2Jfam\nFake: line","settings":{"app":"kinfield-family"},"tracked":true}`
+	t.Setenv("FAKE_FLY_EXIT", "3")
+
+	if code := r.deploy("--all"); code != 3 {
+		t.Errorf("code = %d, want 3", code)
+	}
+	want := "fly warning\nkinfield- [2Jfam Fake: line wasn't deployed. Deploy it with cadre deploy colette- [2Japi Fake: line --app kinfield- [2Jfam Fake: line.\n"
+	if r.h.errb.String() != want {
+		t.Errorf("stderr = %q, want %q", r.h.errb, want)
+	}
+}
+
+func TestDeployAllRefusesAppsOnSeveralPlatforms(t *testing.T) {
+	r := newDeployRig(t)
+	r.targets = kinfieldTarget + `,{"platform":"vercel","name":"web","settings":{"project":"prj_web","dir":"apps/web"},"tracked":true,"account":"colette-club"}`
+
+	r.assertRefused(r.deploy("--all"), refusedMixed)
+}
+
+func TestDeployWithAppAndAllIsAUsageError(t *testing.T) {
+	for _, flags := range [][]string{
+		{"--app", "kinfield", "--all"},
+		{"--all", "--app=kinfield"},
+		{"--app", "--all"},
+		{"--app"},
+		{"--app", "kinfield", "--app", "kinfield-family"},
+	} {
+		t.Run(strings.Join(flags, " "), func(t *testing.T) {
+			r := newDeployRig(t)
+			r.twoFlyApps()
+
+			code := r.deploy(flags...)
+
+			if code != 2 {
+				t.Errorf("code = %d, want 2", code)
+			}
+			if r.h.errb.String() != usageDeploy {
+				t.Errorf("stderr = %q, want %q", r.h.errb, usageDeploy)
+			}
+			r.assertNoDeploy()
+		})
+	}
+}
+
+// Every app's config is checked before the first deploys, so a missing one deploys nothing.
+func TestDeployChecksEveryConfigBeforeAnyApp(t *testing.T) {
+	r := newDeployRig(t)
+	r.targets = kinfieldFamilyTarget + "," + kinfieldTarget
+
+	r.assertRefused(r.deploy("--all"),
+		"fly.family.toml isn't in this checkout. Set the right file with cadre repo set colette-api --fly-app kinfield-family --fly-config <file>.\n")
+}
+
+// An older cadre names no Fly target. Its one app deploys as before, and --app finds it by its Fly app's name.
+func TestDeployOneUnnamedFlyTargetNeedsNoFlag(t *testing.T) {
+	for _, flags := range [][]string{nil, {"--app", "colette-api-prod"}} {
+		t.Run(fmt.Sprint(flags), func(t *testing.T) {
+			r := newDeployRig(t)
+			r.targets = `{"platform":"fly","name":null,"settings":{"app":"colette-api-prod"},"tracked":true}`
+			sha := r.head()
+
+			code := r.deploy(flags...)
+
+			if code != 0 {
+				t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+			}
+			if _, args, _ := r.flyRan(); args != "deploy --app colette-api-prod --config fly.toml --image-label "+sha {
+				t.Errorf("fly ran with %q", args)
+			}
+		})
+	}
+}
+
+// One question covers every app, so a yes deploys them all.
+func TestDeployAllAsksOnceBeforeTheFirstApp(t *testing.T) {
+	r := newDeployRig(t)
+	r.twoFlyApps()
+	r.items = openItems
+	r.h.deps.Stdin = strings.NewReader("y\n")
+	sha := r.head()
+
+	code := r.deploy("--all")
+
+	if code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+	}
+	want := openItemsText + deployQuestion + "fly output\n" + deployedTo(sha, "kinfield") + "fly output\n" + deployedTo(sha, "kinfield-family")
+	if r.h.out.String() != want {
+		t.Errorf("stdout = %q, want %q", r.h.out, want)
+	}
+}
+
+// fly ships the working tree, so a change made while one app deploys stops the next.
+func TestDeployAllRechecksBeforeEachApp(t *testing.T) {
+	r := newDeployRig(t)
+	r.twoFlyApps()
+	t.Setenv("FAKE_FLY_LEAVES", filepath.Join(r.clone, "left.txt"))
+	sha := r.head()
+
+	code := r.deploy("--all")
+
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if want := "fly warning\n" + refusedClean + familyLeft; r.h.errb.String() != want {
+		t.Errorf("stderr = %q, want %q", r.h.errb, want)
+	}
+	if want := []string{"deploy --app kinfield --config fly.toml --image-label " + sha}; !slices.Equal(r.flyDeploys(), want) {
+		t.Errorf("fly deployed %q, want %q", r.flyDeploys(), want)
+	}
+}
+
+func TestDeployAllJSONPrintsOneObjectPerApp(t *testing.T) {
+	r := newDeployRig(t)
+	r.twoFlyApps()
+	sha := r.head()
+
+	code := r.deploy("--all", "--json")
+
+	if code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+	}
+	want := `{"repo":"colette-api","app":"kinfield","config":"fly.toml","commit":"` + sha + `"}` + "\n" +
+		`{"repo":"colette-api","app":"kinfield-family","config":"fly.family.toml","commit":"` + sha + `"}` + "\n"
+	if r.h.out.String() != want {
+		t.Errorf("stdout = %q, want %q", r.h.out, want)
+	}
+}
+
+// cadre repo set sets the app its --name gives, else the one named after its Fly app, so the command the refusal gives
+// names the app when that isn't its name.
+func TestDeployRefusalNamesAnAppWhoseNameDiffers(t *testing.T) {
+	const command = " in this checkout. Set the right file with cadre repo set colette-api --fly-app colette-api-prod"
+	for _, tc := range []struct{ name, target, want string }{
+		{
+			"a name other than its Fly app's",
+			`{"platform":"fly","name":"api","settings":{"app":"colette-api-prod"},"tracked":true}`,
+			"Neither fly.production.toml nor fly.toml is" + command + " --name api --fly-config <file>.\n",
+		},
+		{
+			"a name other than its Fly app's, with a status URL",
+			`{"platform":"fly","name":"api","settings":{"app":"colette-api-prod"},"status_url":"https://app.test/status","tracked":true}`,
+			"Neither fly.production.toml nor fly.toml is" + command + " --name api --status-url 'https://app.test/status' --fly-config <file>.\n",
+		},
+		{
+			"its Fly app's name",
+			`{"platform":"fly","name":"colette-api-prod","settings":{"app":"colette-api-prod"},"tracked":true}`,
+			refusedNoConfig,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newDeployRig(t)
+			r.noConfigFile()
+			r.targets = tc.target
+
+			r.assertRefused(r.deploy(), tc.want)
+		})
+	}
+}
+
+// With no app cadre can deploy there is nothing to pick from, so a flag gets the refusal that says how to connect one.
+func TestDeployWithAFlagOnARepoWithNoApp(t *testing.T) {
+	for _, flags := range [][]string{{"--app", "colette-api-prod"}, {"--all"}} {
+		t.Run(strings.Join(flags, " "), func(t *testing.T) {
+			r := newDeployRig(t)
+			r.onlyRender()
+
+			r.assertRefused(r.deploy(flags...), refusedNoTarget)
+		})
+	}
+}
+
+// An app with no Fly app is named in the refusal, and the command connects that app, not one named after the Fly app.
+func TestDeployAllRefusesANamedAppWithNoFlyApp(t *testing.T) {
+	r := newDeployRig(t)
+	r.targets = kinfieldTarget + `,{"platform":"fly","name":"kinfield-family","settings":{},"tracked":true}`
+
+	r.assertRefused(r.deploy("--all"),
+		"kinfield-family has no Fly app. Connect it with cadre repo set colette-api --fly-app <app> --name kinfield-family.\n")
+}
+
+// cadre deploy deploys only to Fly and Vercel, so an app on another platform isn't one to pick from.
+func TestDeployPassesOverAnAppOnAnotherPlatform(t *testing.T) {
+	r := newDeployRig(t)
+	r.targets = `{"platform":"app_store","name":"ios","tracked":true},` + flyTarget
+	sha := r.head()
+
+	code := r.deploy()
+
+	if code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+	}
+	if _, args, _ := r.flyRan(); args != "deploy --app colette-api-prod --config fly.toml --image-label "+sha {
+		t.Errorf("fly ran with %q", args)
+	}
+}
+
+// Names come from the server, so an escape or a newline in one can't move the cursor or forge a line.
+func TestDeployPrintsNamesFromCadreOnOneLine(t *testing.T) {
+	const evil = `\u001b[2J\nFake: line`
+	const shown = " [2J Fake: line"
+	t.Run("the Fly app it deployed", func(t *testing.T) {
+		r := newDeployRig(t)
+		r.targets = `{"platform":"fly","name":"api","settings":{"app":"app` + evil + `"},"tracked":true}`
+		sha := r.head()
+
+		if code := r.deploy(); code != 0 {
+			t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+		}
+		if want := "fly output\n" + deployedTo(sha, "app"+shown); r.h.out.String() != want {
+			t.Errorf("stdout = %q, want %q", r.h.out, want)
+		}
+	})
+	t.Run("a config that isn't in the checkout", func(t *testing.T) {
+		r := newDeployRig(t)
+		r.name = "repo\u001b[2J\nFake: line"
+		r.targets = `{"platform":"fly","name":"name` + evil + `","settings":{"app":"app` + evil + `","config":"config` + evil + `"},"tracked":true}`
+
+		r.assertRefused(r.deploy(), "config"+shown+" isn't in this checkout. Set the right file with cadre repo set repo"+shown+
+			" --fly-app app"+shown+" --name name"+shown+" --fly-config <file>.\n")
+	})
+	t.Run("an app with no Fly app", func(t *testing.T) {
+		r := newDeployRig(t)
+		r.name = "repo\u001b[2J\nFake: line"
+		r.targets = `{"platform":"fly","name":"name` + evil + `","settings":{},"tracked":true}`
+
+		r.assertRefused(r.deploy(), "name"+shown+" has no Fly app. Connect it with cadre repo set repo"+shown+" --fly-app <app> --name name"+shown+".\n")
+	})
+}
+
+// The repo's name in a refusal is the server's, so an escape or a newline in it can't move the cursor or forge a line.
+func TestDeployRefusalsPrintTheReposNameOnOneLine(t *testing.T) {
+	const repo = "repo [2J Fake: line"
+	const vercelWeb = `{"platform":"vercel","name":"web","settings":{"project":"prj_web","dir":"apps/web"},"tracked":true,"account":"colette-club"}`
+	for _, tc := range []struct {
+		name, targets string
+		flags         []string
+		want          string
+	}{
+		{"several apps, no flag", kinfieldFamilyTarget + "," + kinfieldTarget, nil,
+			repo + " has 2 apps: kinfield, kinfield-family. Pass --app <name> or --all.\n"},
+		{"several platforms, no flag", kinfieldTarget + "," + vercelWeb, nil,
+			repo + " has 2 apps: kinfield, web. Pass --app <name>, in deploy order.\n"},
+		{"an app it doesn't have", kinfieldFamilyTarget + "," + kinfieldTarget, []string{"--app", "linear"},
+			repo + " has no app linear. Its apps: kinfield, kinfield-family.\n"},
+		{"--all on several platforms", kinfieldTarget + "," + vercelWeb, []string{"--all"},
+			repo + " has apps on more than one platform. Deploy each with --app <name>, in deploy order.\n"},
+		{"no app it can deploy", renderTarget, nil,
+			repo + " has no app cadre can deploy. Connect one with cadre repo set " + repo +
+				" --fly-app <app>, or --vercel-project <id> --name <app> --vercel-dir <folder>.\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newDeployRig(t)
+			r.name = "repo\u001b[2J\nFake: line"
+			r.targets = tc.targets
+
+			r.assertRefused(r.deploy(tc.flags...), tc.want)
+		})
+	}
 }

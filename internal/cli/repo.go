@@ -11,9 +11,9 @@ import (
 	"github.com/djeusette/cadre_cli/internal/api"
 )
 
-// runRepo dispatches `repo set <repo> (--fly-app <app> [--fly-config <file>] [--status-url <url>]|--vercel-project <id>
-// --name <app> --vercel-dir <folder>|--platform <name>)`, `repo unset <repo> --platform <name> [--name <app>]` and
-// `repo show <repo>`.
+// runRepo dispatches `repo set <repo> (--fly-app <app> [--name <app>] [--fly-config <file>] [--status-url <url>]
+// |--vercel-project <id> --name <app> --vercel-dir <folder>|--platform <name>)`,
+// `repo unset <repo> (--name <app>|--platform <name> [--name <app>])` and `repo show <repo>`.
 func runRepo(env Env, asJSON bool, args []string) int {
 	if len(args) == 0 {
 		return showHelp(env, []string{"repo"})
@@ -24,14 +24,17 @@ func runRepo(env Env, asJSON bool, args []string) int {
 		return runRepoSet(env, asJSON, rest)
 	case "unset":
 		platform, rest, ok := takeFlag(rest, "--platform")
-		if !ok || platform == "" {
+		if !ok {
 			return usageError(env, "repo unset")
 		}
 		name, rest, ok := takeFlag(rest, "--name")
-		if !ok || (name == "" && strings.EqualFold(platform, "vercel")) {
+		if !ok || (platform == "" && name == "") {
 			return usageError(env, "repo unset")
 		}
 		return runCommand(env, asJSON, "repo unset", rest, 1, func(ctx context.Context, s *session, a []string) int {
+			if platform == "" {
+				return unsetApp(ctx, s, a[0], name)
+			}
 			return unsetTarget(ctx, s, a[0], platform, name)
 		})
 	case "show":
@@ -73,7 +76,8 @@ func takeRepoSetFlags(args []string) (repoSetFlags, []string, bool) {
 	}
 	valid := forms == 1 &&
 		(f.flyApp != "" || (f.flyConfig == "" && f.statusURL == "")) &&
-		(f.vercelProject != "" || (f.name == "" && f.vercelDir == "")) &&
+		(f.vercelProject != "" || f.vercelDir == "") &&
+		(f.vercelProject != "" || f.flyApp != "" || f.name == "") &&
 		(f.vercelProject == "" || (f.name != "" && f.vercelDir != "" && f.statusURL == "" && f.flyConfig == ""))
 	return f, args, valid
 }
@@ -121,16 +125,40 @@ func setTarget(ctx context.Context, s *session, repo, platform, name string, set
 		fmt.Fprint(s.env.Stdout, string(target.Raw))
 	case target.Tracked:
 		fmt.Fprintln(s.env.Stdout, connectedLine(target))
+		if platform == "fly" && name == "" {
+			s.sayFurtherApp(ctx, repo)
+		}
 	default:
 		fmt.Fprintf(s.env.Stdout, "cadre can't read %s deploys yet, so %s shows as not tracked.\n", displayName(target.Platform), target.Repo)
 	}
 	return 0
 }
 
-// connectedLine is what set says about a tracked target: what it connected to, the account reading it if any, and
-// what it deploys with. It reads the server's answer, so a setting that didn't stick shows.
+// sayFurtherApp says that the repo now has several apps, and how to move one instead of adding another. Two Fly apps
+// trigger it, but it counts and lists every app of the repo. The set already happened, so a failed read of the repo
+// says nothing rather than failing it.
+func (s *session) sayFurtherApp(ctx context.Context, repo string) {
+	shown, err := s.client.ShowRepository(ctx, repo)
+	if err != nil {
+		return
+	}
+	flyApps := slices.DeleteFunc(slices.Clone(shown.Targets), func(t api.Target) bool { return t.Platform != "fly" })
+	if len(flyApps) < 2 {
+		return
+	}
+	apps := slices.Clone(shown.Targets)
+	slices.SortStableFunc(apps, byName)
+	fmt.Fprintf(s.env.Stdout, "%s now has %d apps: %s. To move an app instead, pass --name <app>.\n", repo, len(apps), targetNames(apps))
+}
+
+// connectedLine is what set says about a tracked target: what it connected to, under what name when the app's name
+// isn't its Fly app's or it is on Vercel, the account reading it if any, and what it deploys with. It reads the
+// server's answer, so a setting that didn't stick shows.
 func connectedLine(t api.Target) string {
 	what := "app" + spaced(setting(t, "app"))
+	if t.Platform == "fly" && t.Name != "" && t.Name != setting(t, "app") {
+		what += " as" + spaced(oneLine(t.Name))
+	}
 	if t.Platform == "vercel" {
 		what = "project" + spaced(setting(t, "project")) + " as" + spaced(oneLine(t.Name))
 	}
@@ -202,14 +230,35 @@ func unsetTarget(ctx context.Context, s *session, repo, platform, name string) i
 	if err != nil {
 		return s.targetFailure(err, repo, platform, name)
 	}
+	return s.reportRemoved(removed, name)
+}
 
+// unsetApp removes the repo's app called name, whatever its platform.
+func unsetApp(ctx context.Context, s *session, repo, name string) int {
+	if !s.requireKey() {
+		return 1
+	}
+
+	removed, err := s.client.UnsetApp(ctx, repo, name)
+	switch {
+	case errors.Is(err, api.ErrTargetNotFound):
+		fmt.Fprintf(s.env.Stderr, "%s has no app %s.\n", repo, name)
+		return 1
+	case err != nil:
+		return s.repoFailure(err, repo, "")
+	}
+	return s.reportRemoved(removed, name)
+}
+
+// reportRemoved prints what an unset removed: the server's answer with --json, else a line naming the app if given.
+func (s *session) reportRemoved(removed api.Unset, name string) int {
 	switch {
 	case s.asJSON:
 		fmt.Fprint(s.env.Stdout, string(removed.Raw))
 	case name != "":
-		fmt.Fprintf(s.env.Stdout, "Removed %s's %s target %s.\n", removed.Repo, displayName(removed.Platform), name)
+		fmt.Fprintf(s.env.Stdout, "Removed %s's %s app %s.\n", removed.Repo, displayName(removed.Platform), name)
 	default:
-		fmt.Fprintf(s.env.Stdout, "Removed %s's %s target.\n", removed.Repo, displayName(removed.Platform))
+		fmt.Fprintf(s.env.Stdout, "Removed %s's %s app.\n", removed.Repo, displayName(removed.Platform))
 	}
 	return 0
 }
@@ -260,7 +309,7 @@ func targetState(t api.Target) string {
 		return "not tracked"
 	}
 	pairs := make([]string, 0, len(t.Settings)+3)
-	if t.Name != "" {
+	if t.Name != "" && t.Name != setting(t, "app") {
 		pairs = append(pairs, oneLine(t.Name))
 	}
 	for _, key := range slices.Sorted(maps.Keys(t.Settings)) {
