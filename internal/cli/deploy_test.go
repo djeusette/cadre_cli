@@ -118,8 +118,12 @@ type deployRig struct {
 	fullName string
 	targets  string
 	items    string
+	blocked  string
+	apps     string // next-deploy's apps, in queue order
 	repoGone bool
 	next     func(http.ResponseWriter) // answers next-deploy instead of the items, when set
+
+	nextQueries []string // the query of each next-deploy request, in order
 }
 
 func newDeployRig(t *testing.T) *deployRig {
@@ -145,6 +149,8 @@ func newDeployRig(t *testing.T) *deployRig {
 		fullName: "colette-club/colette-api",
 		targets:  flyTarget,
 		items:    "[]",
+		blocked:  "[]",
+		apps:     "[]",
 	}
 	r.isolate()
 	r.makeClone()
@@ -208,15 +214,22 @@ func (r *deployRig) startServer() {
 		case req.URL.Path == "/api/repositories/colette-api":
 			name, _ := json.Marshal(r.name)
 			writeJSON(w, 200, `{"name":`+string(name)+`,"github_full_name":"`+r.fullName+`","targets":[`+r.targets+`]}`)
-		case req.URL.Path == "/api/repositories/"+r.name+"/next-deploy" && r.next != nil:
-			r.next(w)
 		case req.URL.Path == "/api/repositories/"+r.name+"/next-deploy":
-			writeJSON(w, 200, `{"repo":"colette-api","before_deploying":`+r.items+`}`)
+			r.nextQueries = append(r.nextQueries, req.URL.RawQuery)
+			r.answerNextDeploy(w)
 		default:
 			r.t.Errorf("unexpected path %s", req.URL.Path)
 		}
 	}))
 	r.t.Cleanup(r.srv.Close)
+}
+
+func (r *deployRig) answerNextDeploy(w http.ResponseWriter) {
+	if r.next != nil {
+		r.next(w)
+		return
+	}
+	writeJSON(w, 200, `{"repo":"colette-api","apps":`+r.apps+`,"before_deploying":`+r.items+`,"blocked":`+r.blocked+`}`)
 }
 
 func (r *deployRig) git(dir string, args ...string) string {
@@ -1197,7 +1210,7 @@ func TestDeployRechecksWithoutAQuestion(t *testing.T) {
 			r.next = func(w http.ResponseWriter) {
 				_, err := tryGit(r.clone, "commit", "--allow-empty", "-m", "local")
 				committed <- err
-				writeJSON(w, 200, `{"repo":"colette-api","before_deploying":`+tc.items+`}`)
+				writeJSON(w, 200, `{"repo":"colette-api","apps":[],"before_deploying":`+tc.items+`,"blocked":[]}`)
 			}
 
 			code := r.deploy(tc.flags...)
@@ -1762,4 +1775,238 @@ func TestDeployRefusalsPrintTheReposNameOnOneLine(t *testing.T) {
 			r.assertRefused(r.deploy(tc.flags...), tc.want)
 		})
 	}
+}
+
+// A pull request the release queue shows Blocked behind api's #36, and the line that says so.
+const (
+	blockedOnAPI     = `[{"number":37,"url":"https://github.com/colette-club/match-day/pull/37","waits_for":{"name":"api","number":36}}]`
+	blockedOnAPIText = "#37 is Blocked: api should run #36 first.\n"
+)
+
+func TestDeployAsksAboutABlockedPullRequest(t *testing.T) {
+	t.Run("a yes deploys", func(t *testing.T) {
+		r := newDeployRig(t)
+		r.blocked = blockedOnAPI
+		r.h.deps.Stdin = strings.NewReader("y\n")
+
+		code := r.deploy()
+
+		if code != 0 {
+			t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+		}
+		r.flyRan()
+		if want := blockedOnAPIText + deployQuestion + "fly output\n" + deployedLine(r.head()); r.h.out.String() != want {
+			t.Errorf("stdout = %q, want %q", r.h.out, want)
+		}
+	})
+	t.Run("nothing to read deploys nothing", func(t *testing.T) {
+		r := newDeployRig(t)
+		r.blocked = blockedOnAPI
+
+		code := r.deploy()
+
+		if code != 1 || r.h.errb.String() != refusedAnswer {
+			t.Errorf("code = %d, stderr %q, want %q", code, r.h.errb, refusedAnswer)
+		}
+		if want := blockedOnAPIText + deployQuestion + "\n"; r.h.out.String() != want {
+			t.Errorf("stdout = %q, want %q", r.h.out, want)
+		}
+		r.assertNoDeploy()
+	})
+}
+
+// An earlier step with no pull request yet can only be named.
+func TestDeployBlockedWithNoPullRequestOnTheEarlierStep(t *testing.T) {
+	r := newDeployRig(t)
+	r.blocked = `[{"number":37,"url":"https://github.com/colette-club/match-day/pull/37","waits_for":{"name":"api","number":null}}]`
+
+	code := r.deploy()
+
+	if code != 1 || r.h.errb.String() != refusedAnswer {
+		t.Errorf("code = %d, stderr %q, want %q", code, r.h.errb, refusedAnswer)
+	}
+	if want := "#37 is Blocked: api should deploy first.\n" + deployQuestion + "\n"; r.h.out.String() != want {
+		t.Errorf("stdout = %q, want %q", r.h.out, want)
+	}
+	r.assertNoDeploy()
+}
+
+// One question covers the open items and the Blocked pull requests, the items first.
+func TestDeployListsItemsThenBlocked(t *testing.T) {
+	r := newDeployRig(t)
+	r.items = openItems
+	r.blocked = blockedOnAPI
+	r.h.deps.Stdin = strings.NewReader("y\n")
+
+	code := r.deploy()
+
+	if code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+	}
+	if want := openItemsText + blockedOnAPIText + deployQuestion + "fly output\n" + deployedLine(r.head()); r.h.out.String() != want {
+		t.Errorf("stdout = %q, want %q", r.h.out, want)
+	}
+}
+
+func TestDeployYesGoesOnPastBlocked(t *testing.T) {
+	r := newDeployRig(t)
+	r.blocked = blockedOnAPI
+
+	code := r.deploy("--yes")
+
+	if code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+	}
+	r.flyRan()
+	if want := blockedOnAPIText + "fly output\n" + deployedLine(r.head()); r.h.out.String() != want {
+		t.Errorf("stdout = %q, want %q", r.h.out, want)
+	}
+}
+
+// The name of what should go first comes from Cadre, so an escape or a newline in it can't forge the question.
+func TestDeployPrintsABlockedLineOnOneLine(t *testing.T) {
+	r := newDeployRig(t)
+	r.blocked = `[{"number":37,"url":"u","waits_for":{"name":"api\u001b[2J\nDeploy anyway? [y/N] y","number":36}}]`
+
+	if code := r.deploy("--yes"); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+	}
+	if want := "#37 is Blocked: api [2J Deploy anyway? [y/N] y should run #36 first.\nfly output\n" + deployedLine(r.head()); r.h.out.String() != want {
+		t.Errorf("stdout = %q, want %q", r.h.out, want)
+	}
+}
+
+// A reply with no Blocked list says nothing about what is Blocked, so it never reads as nothing Blocked, even with --yes.
+func TestDeployStopsWhenCadreAnswersNoBlockedList(t *testing.T) {
+	for _, body := range []string{
+		`{"repo":"colette-api","apps":[],"before_deploying":[]}`,
+		`{"repo":"colette-api","apps":[],"before_deploying":[],"blocked":null}`,
+	} {
+		for _, flags := range [][]string{nil, {"--yes"}} {
+			t.Run(fmt.Sprintf("%s %v", body, flags), func(t *testing.T) {
+				r := newDeployRig(t)
+				r.next = func(w http.ResponseWriter) { writeJSON(w, 200, body) }
+
+				code := r.deploy(flags...)
+
+				r.assertRefused(code, "Could not complete the request to "+r.srv.URL+": unexpected response from "+r.srv.URL+" (status 200): no blocked list\n")
+			})
+		}
+	}
+}
+
+// --app asks Cadre about that app's pull requests alone; --all, or a repo's one app, about the repo's.
+func TestDeployAppAsksNextDeployForThatApp(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		apps  func(*deployRig)
+		flags []string
+		want  string
+	}{
+		{"--app", (*deployRig).twoFlyApps, []string{"--app", "kinfield-family"}, "app=kinfield-family"},
+		{"--all", (*deployRig).twoFlyApps, []string{"--all"}, ""},
+		{"a repo's one app", func(*deployRig) {}, nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newDeployRig(t)
+			tc.apps(r)
+
+			if code := r.deploy(tc.flags...); code != 0 {
+				t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+			}
+			if want := []string{tc.want}; !slices.Equal(r.nextQueries, want) {
+				t.Errorf("next-deploy queries = %q, want %q", r.nextQueries, want)
+			}
+		})
+	}
+}
+
+func TestDeployAllDeploysFlyAppsInQueueOrder(t *testing.T) {
+	t.Run("the queue's order", func(t *testing.T) {
+		r := newDeployRig(t)
+		r.twoFlyApps()
+		r.apps = `["kinfield-family","kinfield"]`
+		sha := r.head()
+
+		if code := r.deploy("--all"); code != 0 {
+			t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+		}
+		want := []string{
+			"deploy --app kinfield-family --config fly.family.toml --image-label " + sha,
+			"deploy --app kinfield --config fly.toml --image-label " + sha,
+		}
+		if !slices.Equal(r.flyDeploys(), want) {
+			t.Errorf("fly deployed %q, want %q", r.flyDeploys(), want)
+		}
+		if want := "fly output\n" + deployedTo(sha, "kinfield-family") + "fly output\n" + deployedTo(sha, "kinfield"); r.h.out.String() != want {
+			t.Errorf("stdout = %q, want %q", r.h.out, want)
+		}
+	})
+	t.Run("an app the queue doesn't list goes last, by name", func(t *testing.T) {
+		r := newDeployRig(t)
+		r.twoFlyApps()
+		r.targets += `,{"platform":"fly","name":"kinfield-admin","settings":{"app":"kinfield-admin","config":"fly.admin.toml"},"tracked":true}`
+		r.pushed("fly.admin.toml")
+		r.apps = `["web","kinfield-family"]`
+		sha := r.head()
+
+		if code := r.deploy("--all"); code != 0 {
+			t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+		}
+		want := []string{
+			"deploy --app kinfield-family --config fly.family.toml --image-label " + sha,
+			"deploy --app kinfield --config fly.toml --image-label " + sha,
+			"deploy --app kinfield-admin --config fly.admin.toml --image-label " + sha,
+		}
+		if !slices.Equal(r.flyDeploys(), want) {
+			t.Errorf("fly deployed %q, want %q", r.flyDeploys(), want)
+		}
+	})
+}
+
+// A step naming kinfield before kinfield-family makes #214 Blocked on kinfield-family's card, behind kinfield, which this
+// run deploys first. The queue says Blocked, so cadre asks all the same.
+func TestDeployAllAsksAboutAPullRequestBlockedOnAnAppItDeploysFirst(t *testing.T) {
+	const (
+		blockedOnKinfield     = `[{"number":214,"url":"https://github.com/colette-club/kinfield/pull/214","waits_for":{"name":"kinfield","number":214}}]`
+		blockedOnKinfieldText = "#214 is Blocked: kinfield should run #214 first.\n"
+	)
+	t.Run("nothing to read deploys nothing", func(t *testing.T) {
+		r := newDeployRig(t)
+		r.twoFlyApps()
+		r.apps = `["kinfield","kinfield-family"]`
+		r.blocked = blockedOnKinfield
+
+		code := r.deploy("--all")
+
+		if code != 1 || r.h.errb.String() != refusedAnswer {
+			t.Errorf("code = %d, stderr %q, want %q", code, r.h.errb, refusedAnswer)
+		}
+		if want := blockedOnKinfieldText + deployQuestion + "\n"; r.h.out.String() != want {
+			t.Errorf("stdout = %q, want %q", r.h.out, want)
+		}
+		r.assertNoDeploy()
+	})
+	t.Run("a yes deploys each app in the queue's order", func(t *testing.T) {
+		r := newDeployRig(t)
+		r.twoFlyApps()
+		r.apps = `["kinfield","kinfield-family"]`
+		r.blocked = blockedOnKinfield
+		r.h.deps.Stdin = strings.NewReader("y\n")
+		sha := r.head()
+
+		if code := r.deploy("--all"); code != 0 {
+			t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+		}
+		want := []string{
+			"deploy --app kinfield --config fly.toml --image-label " + sha,
+			"deploy --app kinfield-family --config fly.family.toml --image-label " + sha,
+		}
+		if !slices.Equal(r.flyDeploys(), want) {
+			t.Errorf("fly deployed %q, want %q", r.flyDeploys(), want)
+		}
+		if want := blockedOnKinfieldText + deployQuestion + "fly output\n" + deployedTo(sha, "kinfield") + "fly output\n" + deployedTo(sha, "kinfield-family"); r.h.out.String() != want {
+			t.Errorf("stdout = %q, want %q", r.h.out, want)
+		}
+	})
 }

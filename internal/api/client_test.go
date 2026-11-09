@@ -780,10 +780,10 @@ func TestNextDeploy(t *testing.T) {
 			t.Errorf("bad request: %s %s %v", r.Method, r.URL.EscapedPath(), r.Header)
 		}
 		w.WriteHeader(200)
-		io.WriteString(w, `{"repo":"colette-api","before_deploying":[{"number":418,"url":"https://github.com/colette-club/colette-api/pull/418","text":"Set SENDGRID_KEY on colette-api"}]}`)
+		io.WriteString(w, `{"repo":"colette-api","apps":["colette-api"],"before_deploying":[{"number":418,"url":"https://github.com/colette-club/colette-api/pull/418","text":"Set SENDGRID_KEY on colette-api"}],"blocked":[]}`)
 	})
 
-	got, err := c.NextDeploy(context.Background(), "colette-api")
+	got, err := c.NextDeploy(context.Background(), "colette-api", "")
 
 	want := api.BeforeDeployingItem{Number: 418, URL: "https://github.com/colette-club/colette-api/pull/418", Text: "Set SENDGRID_KEY on colette-api"}
 	if err != nil || got.Repo != "colette-api" || len(got.BeforeDeploying) != 1 || got.BeforeDeploying[0] != want {
@@ -792,11 +792,11 @@ func TestNextDeploy(t *testing.T) {
 }
 
 func TestNextDeployWithNothingOpen(t *testing.T) {
-	c := newClient(t, reply(200, `{"repo":"colette-api","before_deploying":[]}`))
+	c := newClient(t, reply(200, `{"repo":"colette-api","apps":[],"before_deploying":[],"blocked":[]}`))
 
-	got, err := c.NextDeploy(context.Background(), "colette-api")
+	got, err := c.NextDeploy(context.Background(), "colette-api", "")
 
-	if err != nil || got.BeforeDeploying == nil || len(got.BeforeDeploying) != 0 {
+	if err != nil || got.BeforeDeploying == nil || len(got.BeforeDeploying) != 0 || got.Blocked == nil || len(got.Blocked) != 0 {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 }
@@ -810,7 +810,83 @@ func TestNextDeployWithoutAList(t *testing.T) {
 		`{"repo":"colette-api","open_items":[]}`,
 	} {
 		c := newClient(t, reply(200, body))
-		if _, err := c.NextDeploy(context.Background(), "colette-api"); err == nil || !strings.Contains(err.Error(), "unexpected response") {
+		if _, err := c.NextDeploy(context.Background(), "colette-api", ""); err == nil || !strings.Contains(err.Error(), "unexpected response") {
+			t.Errorf("%s: err = %v", body, err)
+		}
+	}
+}
+
+// One app's answer: its apps, its items and the pull requests the queue shows Blocked, each with the step it waits for,
+// whose pull request may be unknown.
+func TestNextDeployAsksForOneApp(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.EscapedPath() != "/api/repositories/kinfield/next-deploy" || r.URL.RawQuery != "app=kinfield-family" {
+			t.Errorf("bad request: %s %s?%s", r.Method, r.URL.EscapedPath(), r.URL.RawQuery)
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, `{"repo":"kinfield","apps":["kinfield-family"],"before_deploying":[],"blocked":[
+			{"number":214,"url":"https://github.com/colette-club/kinfield/pull/214","waits_for":{"name":"kinfield","number":214}},
+			{"number":219,"url":"https://github.com/colette-club/kinfield/pull/219","waits_for":{"name":"club-mobile","number":null}}
+		]}`)
+	})
+
+	got, err := c.NextDeploy(context.Background(), "kinfield", "kinfield-family")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got.Apps, []string{"kinfield-family"}) || len(got.Blocked) != 2 {
+		t.Fatalf("got %+v", got)
+	}
+	first, second := got.Blocked[0], got.Blocked[1]
+	if first.Number != 214 || first.URL != "https://github.com/colette-club/kinfield/pull/214" || first.WaitsFor.Name != "kinfield" ||
+		first.WaitsFor.Number == nil || *first.WaitsFor.Number != 214 {
+		t.Errorf("first = %+v", first)
+	}
+	if second.Number != 219 || second.WaitsFor.Name != "club-mobile" || second.WaitsFor.Number != nil {
+		t.Errorf("second = %+v", second)
+	}
+}
+
+func TestNextDeployAsksForTheRepoWithNoApp(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() != "/api/repositories/kinfield/next-deploy" || r.URL.RawQuery != "" {
+			t.Errorf("bad request: %s?%s", r.URL.EscapedPath(), r.URL.RawQuery)
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, `{"repo":"kinfield","apps":["kinfield","kinfield-family"],"before_deploying":[],"blocked":[]}`)
+	})
+
+	got, err := c.NextDeploy(context.Background(), "kinfield", "")
+
+	if err != nil || !slices.Equal(got.Apps, []string{"kinfield", "kinfield-family"}) {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+// The app's name goes in the query escaped, so no character in it can add a parameter.
+func TestNextDeployEscapesTheApp(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query(); len(got) != 1 || got.Get("app") != "web&all=1 #x" {
+			t.Errorf("query = %q", r.URL.RawQuery)
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, `{"repo":"match-day","apps":[],"before_deploying":[],"blocked":[]}`)
+	})
+
+	if _, err := c.NextDeploy(context.Background(), "match-day", "web&all=1 #x"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A 200 with no Blocked list says nothing about what is Blocked, so it must not read as nothing being Blocked.
+func TestNextDeployWithoutBlockedIsAnError(t *testing.T) {
+	for _, body := range []string{
+		`{"repo":"colette-api","apps":[],"before_deploying":[]}`,
+		`{"repo":"colette-api","apps":[],"before_deploying":[],"blocked":null}`,
+	} {
+		c := newClient(t, reply(200, body))
+		if _, err := c.NextDeploy(context.Background(), "colette-api", ""); err == nil || !strings.Contains(err.Error(), "unexpected response") {
 			t.Errorf("%s: err = %v", body, err)
 		}
 	}
@@ -823,11 +899,12 @@ func TestNextDeployErrors(t *testing.T) {
 		want   error
 	}{
 		{404, `{"error":"repository_not_found"}`, api.ErrRepositoryNotFound},
+		{404, `{"error":"target_not_found"}`, api.ErrTargetNotFound},
 		{401, `{"error":"unauthorized"}`, api.ErrUnauthorized},
 	}
 	for _, tc := range cases {
 		c := newClient(t, reply(tc.status, tc.body))
-		if _, err := c.NextDeploy(context.Background(), "colette-api"); !errors.Is(err, tc.want) {
+		if _, err := c.NextDeploy(context.Background(), "colette-api", "kinfield-family"); !errors.Is(err, tc.want) {
 			t.Errorf("%d: err = %v", tc.status, err)
 		}
 	}

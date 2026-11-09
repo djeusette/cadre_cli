@@ -299,9 +299,10 @@ commit as the image label, so Cadre can tie the deploy to it. It refuses unless
 the checkout is on main, has no uncommitted changes or untracked files, and main
 equals origin/main after a git fetch. The repo needs a Fly app, set with cadre
 repo set, and fly must be installed and signed in. With --all, the Fly apps
-deploy one at a time, by name, and the first that fails stops the ones after it.
-A signal such as Ctrl-C also stops them, before the next app. A run that stops
-part-way names each app after the one it stopped at.
+deploy one at a time, in the order Cadre's release queue lists them, and the
+first that fails stops the ones after it. A signal such as Ctrl-C also stops
+them, before the next app. A run that stops part-way names each app after the
+one it stopped at.
 
 The config file is the one set with --fly-config, else fly.production.toml if
 it's committed, else fly.toml. That file must be committed and on disk, or it
@@ -318,16 +319,18 @@ promotes nothing and shows what vercel printed, and a failed promotion stops
 the ones after it and says which apps went live. --app builds and promotes that
 app alone. vercel must be installed and signed in.
 
-Open Before deploying items are listed, and cadre asks once, before the first
-app deploys. It asks the same, in one question, when the commit lacks what a
-Vercel app runs now. With nothing to read, the answer is no. If Cadre can't say
-what is open, nothing deploys. Right before fly or vercel runs, cadre checks the
-commit and the working tree again, and for Fly the branch, so a change made in
-the meantime stops the deploy.`,
+Open Before deploying items are listed, and so are the pull requests it would
+ship that Cadre's release queue shows Blocked, each with what should deploy
+first. With --app, only that app's are listed. cadre asks once, before the
+first app deploys. It asks the same, in one question, when the commit lacks
+what a Vercel app runs now. With nothing to read, the answer is no. If Cadre
+can't say what is open or Blocked, nothing deploys. Right before fly or vercel
+runs, cadre checks the commit and the working tree again, and for Fly the
+branch, so a change made in the meantime stops the deploy.`,
 				flags: []helpRow{
 					{"--app <name>", "Deploy that app alone, by its name in Cadre"},
 					{"--all", "Deploy every app of the repo"},
-					{"--yes", "Go on without asking about open items or what the commit lacks"},
+					{"--yes", "Go on without asking about what is listed before the deploy"},
 					{"--json", "Print one JSON object per app deployed, and all else on stderr"},
 				},
 				examples: []string{

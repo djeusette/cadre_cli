@@ -256,7 +256,7 @@ func TestSeveralAppsAreDocumentedInStep(t *testing.T) {
 		for _, want := range []string{
 			"A repo with several needs --app <name> for one of them, or --all for every one.",
 			"--all refuses a repo with apps on more than one platform.",
-			"With --all, the Fly apps deploy one at a time, by name, and the first that fails stops the ones after it.",
+			"With --all, the Fly apps deploy one at a time, in the order Cadre's release queue lists them, and the first that fails stops the ones after it.",
 			"A signal such as Ctrl-C also stops them, before the next app. A run that stops part-way names each app after the one it stopped at.",
 			"--app builds and promotes that app alone.",
 		} {
@@ -267,6 +267,37 @@ func TestSeveralAppsAreDocumentedInStep(t *testing.T) {
 		if strings.Contains(said, "apps on both") {
 			t.Errorf("%s still says a repo with apps on both platforms is refused", name)
 		}
+		if strings.Contains(said, "one at a time, by name") {
+			t.Errorf("%s still says the Fly apps deploy by name", name)
+		}
+	}
+}
+
+// The help and the README say the same about the pull requests the release queue shows Blocked.
+func TestBlockedPullRequestsAreDocumentedInStep(t *testing.T) {
+	srv, _ := helpServer(t)
+	h := newHarness(t, srv, nil)
+	if code := cli.Run([]string{"help", "deploy"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, text := range map[string]string{"help": h.out.String(), "README": strings.ReplaceAll(string(readme), "`", "")} {
+		said := strings.Join(strings.Fields(text), " ")
+		for _, want := range []string{
+			"Open Before deploying items are listed, and so are the pull requests it would ship that Cadre's release queue shows Blocked, each with what should deploy first.",
+			"With --app, only that app's are listed.",
+		} {
+			if !strings.Contains(said, want) {
+				t.Errorf("%s doesn't say %q", name, want)
+			}
+		}
+	}
+	if want := "Go on without asking about what is listed before the deploy"; !strings.Contains(h.out.String(), want) {
+		t.Errorf("help doesn't say %q", want)
 	}
 }
 
