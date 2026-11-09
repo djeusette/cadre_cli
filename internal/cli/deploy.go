@@ -191,7 +191,7 @@ func deployFlyApps(ctx context.Context, s *session, d *deployment, flags deployF
 
 	next, err := s.client.NextDeploy(ctx, d.repository.Name, flags.app)
 	if err != nil {
-		return s.repoFailure(err, d.repository.Name, "")
+		return s.nextDeployFailure(err, d.repository.Name, flags.app)
 	}
 	inQueueOrder(d.flyApps, next.Apps)
 	if !s.settleOpenItems(next, nil, flags.yes) {
@@ -496,10 +496,25 @@ func (s *session) settleOpenItems(next api.NextDeploy, lacking []string, yes boo
 	return s.answeredYes()
 }
 
+// nextDeployFailure reports why Cadre didn't say what the deploy needs first. An app Cadre has no card for, as when it
+// was unset since the repo was read, is named; anything else is reported as for any call on the repo.
+func (s *session) nextDeployFailure(err error, repo, app string) int {
+	if app != "" && errors.Is(err, api.ErrTargetNotFound) {
+		name := oneLine(repo)
+		fmt.Fprintf(s.env.Stderr, "%s has no app %s. Run cadre repo show %s.\n", name, oneLine(app), name)
+		return 1
+	}
+	return s.repoFailure(err, repo, "")
+}
+
 // blockedLine says what should go before a Blocked pull request: the earlier step's app or repo, with its pull request
-// when the step has one. The name comes from the server, so it is put on one line.
+// when the step has one, or "an earlier step" when Cadre names none. The name comes from the server, so it is put on
+// one line.
 func blockedLine(pr api.BlockedPullRequest) string {
 	first := oneLine(pr.WaitsFor.Name)
+	if first == "" {
+		first = "an earlier step"
+	}
 	if pr.WaitsFor.Number == nil {
 		return fmt.Sprintf("#%d is Blocked: %s should deploy first.", pr.Number, first)
 	}

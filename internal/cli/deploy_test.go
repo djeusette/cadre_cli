@@ -2010,3 +2010,27 @@ func TestDeployAllAsksAboutAPullRequestBlockedOnAnAppItDeploysFirst(t *testing.T
 		}
 	})
 }
+
+// An app Cadre has no card for, as when it was unset since repo show ran, is named, and nothing deploys.
+func TestDeployAppCadreDoesntKnowIsNamed(t *testing.T) {
+	r := newDeployRig(t)
+	r.twoFlyApps()
+	r.next = func(w http.ResponseWriter) { writeJSON(w, 404, `{"error":"target_not_found"}`) }
+
+	code := r.deploy("--app", "kinfield-family")
+
+	r.assertRefused(code, "colette-api has no app kinfield-family. Run cadre repo show colette-api.\n")
+}
+
+// A step Cadre names with no name still reads as a step.
+func TestDeployBlockedWithNoNameReadsAsAnEarlierStep(t *testing.T) {
+	r := newDeployRig(t)
+	r.blocked = `[{"number":37,"url":"u","waits_for":{"name":"","number":36}}]`
+
+	if code := r.deploy("--yes"); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+	}
+	if want := "#37 is Blocked: an earlier step should run #36 first.\nfly output\n" + deployedLine(r.head()); r.h.out.String() != want {
+		t.Errorf("stdout = %q, want %q", r.h.out, want)
+	}
+}

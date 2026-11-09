@@ -64,7 +64,7 @@ func vercelDeploy(ctx context.Context, s *session, d deployment, flags deployFla
 
 	next, err := s.client.NextDeploy(ctx, v.repository.Name, flags.app)
 	if err != nil {
-		return s.repoFailure(err, v.repository.Name, "")
+		return s.nextDeployFailure(err, v.repository.Name, flags.app)
 	}
 	lacking, err := v.lacking(ctx)
 	if err != nil {
