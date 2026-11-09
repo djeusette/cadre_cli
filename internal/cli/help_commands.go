@@ -154,15 +154,18 @@ page.`,
 			{
 				name:    "pr link",
 				summary: "Link a pull request to a milestone, or unlink it",
-				forms:   []string{"<pr-url> <project>/<n>", "<pr-url> --none"},
+				forms:   []string{"<pr-url> <project>/<n> [--app <name>]", "<pr-url> --none"},
 				about: `<pr-url> is the pull request's GitHub URL. <project>/<n> is a project's slug and
-a milestone number, such as wish-reminders/2.`,
+a milestone number, such as wish-reminders/2. The Cadre: <project>/<n> <app>
+line in a pull request's description does the same as --app.`,
 				flags: []helpRow{
+					{"--app <name>", "Link it to that app's step, by its app name in Cadre"},
 					{"--none", "Unlink the pull request from its milestone"},
 					jsonFlag,
 				},
 				examples: []string{
 					"cadre pr link https://github.com/acme/shop-api/pull/418 wish-reminders/2",
+					"cadre pr link https://github.com/acme/shop-api/pull/37 live-scores/2 --app api",
 					"cadre pr link https://github.com/acme/shop-api/pull/418 --none",
 				},
 			},

@@ -1382,6 +1382,70 @@ func TestPrLink(t *testing.T) {
 	}
 }
 
+const linkedAppBody = `{"repo":"match-day","number":37,"url":"https://github.com/acme/match-day/pull/37","milestone":"live-scores/2","app":"api","project_url":"https://cadre.example/projects/live-scores"}`
+
+func TestPrLinkApp(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, linkedAppBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"pr", "link", prURL, "live-scores/2", "--app", "api"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Linked match-day #37 to live-scores/2 api: https://cadre.example/projects/live-scores\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+	if len(got.body) != 3 || got.body["url"] != prURL || got.body["milestone"] != "live-scores/2" || got.body["app"] != "api" {
+		t.Errorf("body = %v", got.body)
+	}
+}
+
+func TestPrLinkLeavesAppOutWhenEmpty(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, linkedBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"pr", "link", prURL, "wish-reminders/2"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if len(got.body) != 2 {
+		t.Errorf("body = %v", got.body)
+	}
+}
+
+func TestPrLinkAppIsAUsageError(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, linkedAppBody, &got)
+	cases := [][]string{
+		{"pr", "link", prURL, "--app", "api", "--none"},
+		{"pr", "link", prURL, "live-scores/2", "--app"},
+		{"pr", "link", prURL, "live-scores/2", "--app="},
+		{"pr", "link", prURL, "live-scores/2", "--app", "a", "--app", "b"},
+	}
+	for _, args := range cases {
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != usagePrLink {
+			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
+		}
+	}
+	if got.calls != 0 {
+		t.Errorf("the server was called: %+v", got)
+	}
+}
+
+func TestPrLinkAppRefused(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 422, `{"errors":[{"path":"app","message":"must be lowercase letters, digits, - or _"}]}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"pr", "link", prURL, "live-scores/2", "--app", "Web"}, h.deps); code != 1 {
+		t.Errorf("code = %d", code)
+	}
+	if want := "app: must be lowercase letters, digits, - or _\n"; h.errb.String() != want {
+		t.Errorf("stderr = %q", h.errb)
+	}
+}
+
 func TestPrLinkNone(t *testing.T) {
 	var got linkRequest
 	srv := linkServer(t, 200, unlinkedBody, &got)

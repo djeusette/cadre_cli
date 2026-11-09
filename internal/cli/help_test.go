@@ -25,7 +25,7 @@ const (
 	usageProjectUnarchive = "Usage: cadre project unarchive <slug>\nRun cadre help project unarchive for details.\n"
 	usageSpecPull         = "Usage: cadre spec pull <project>/<n> [-o <file>]\nRun cadre help spec pull for details.\n"
 	usageSpecPush         = "Usage: cadre spec push <project>/<n> <file> [--base <version>]\nRun cadre help spec push for details.\n"
-	usagePrLink           = "Usage: cadre pr link <pr-url> <project>/<n>\n       cadre pr link <pr-url> --none\nRun cadre help pr link for details.\n"
+	usagePrLink           = "Usage: cadre pr link <pr-url> <project>/<n> [--app <name>]\n       cadre pr link <pr-url> --none\nRun cadre help pr link for details.\n"
 	usageRepoSet          = "Usage: cadre repo set <repo> --fly-app <app> [--name <app>] [--fly-config <file>]\n       cadre repo set <repo> --vercel-project <id> --name <app> --vercel-dir <folder>\n       cadre repo set <repo> --platform <name>\nRun cadre help repo set for details.\n"
 	usageRepoUnset        = "Usage: cadre repo unset <repo> --name <app>\n       cadre repo unset <repo> --platform <name> [--name <app>]\nRun cadre help repo unset for details.\n"
 	usageRepoShow         = "Usage: cadre repo show <repo>\nRun cadre help repo show for details.\n"
