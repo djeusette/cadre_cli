@@ -8,7 +8,7 @@ import (
 	"github.com/djeusette/cadre_cli/internal/api"
 )
 
-// runPr dispatches `pr link <pr-url> (<project>/<n>|--none)`.
+// runPr dispatches `pr link <pr-url> (<project>/<n> [--app <name>]|--none)`.
 func runPr(env Env, asJSON bool, args []string) int {
 	switch {
 	case len(args) == 0:
@@ -21,7 +21,8 @@ func runPr(env Env, asJSON bool, args []string) int {
 
 func runLink(env Env, asJSON bool, args []string) int {
 	args, none := splitBoolFlag(args, "--none")
-	if len(args) == 0 {
+	app, args, ok := takeFlag(args, "--app")
+	if !ok || (app != "" && none) || len(args) == 0 {
 		return usageError(env, "pr link")
 	}
 	prURL := args[0]
@@ -30,7 +31,7 @@ func runLink(env Env, asJSON bool, args []string) int {
 		return usageError(env, "pr link")
 	}
 	link := func(ctx context.Context, s *session, _ []string) int {
-		return linkPullRequest(ctx, s, prURL, milestone)
+		return linkPullRequest(ctx, s, prURL, milestone, app)
 	}
 	return runCommand(env, asJSON, "pr link", rest, 0, link)
 }
@@ -51,12 +52,12 @@ func linkTarget(rest []string, none bool) (*string, []string, bool) {
 	return &rest[0], rest[1:], true
 }
 
-func linkPullRequest(ctx context.Context, s *session, prURL string, milestone *string) int {
+func linkPullRequest(ctx context.Context, s *session, prURL string, milestone *string, app string) int {
 	if !s.requireKey() {
 		return 1
 	}
 
-	linked, err := s.client.LinkPullRequest(ctx, prURL, milestone)
+	linked, err := s.client.LinkPullRequest(ctx, prURL, milestone, app)
 	switch {
 	case errors.Is(err, api.ErrMilestoneNotFound) && milestone != nil:
 		fmt.Fprintf(s.env.Stderr, "No milestone %s on %s.\n", *milestone, s.baseURL)
@@ -79,6 +80,8 @@ func linkPullRequest(ctx context.Context, s *session, prURL string, milestone *s
 		fmt.Fprint(s.env.Stdout, string(linked.Raw))
 	case linked.Milestone == nil:
 		fmt.Fprintf(s.env.Stdout, "Unlinked %s #%d.\n", linked.Repo, linked.Number)
+	case linked.App != nil:
+		fmt.Fprintf(s.env.Stdout, "Linked %s #%d to %s %s: %s\n", linked.Repo, linked.Number, *linked.Milestone, *linked.App, text(linked.ProjectURL))
 	default:
 		fmt.Fprintf(s.env.Stdout, "Linked %s #%d to %s: %s\n", linked.Repo, linked.Number, *linked.Milestone, text(linked.ProjectURL))
 	}

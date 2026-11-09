@@ -49,7 +49,7 @@ func TestEveryCallMapsTooManyRequests(t *testing.T) {
 		"push spec":      func(c *api.Client) error { _, err := c.PushSpec(ctx, "wish-reminders", 2, "x", ""); return err },
 		"pull spec":      func(c *api.Client) error { _, err := c.PullSpec(ctx, "wish-reminders", 2); return err },
 		"link pull request": func(c *api.Client) error {
-			_, err := c.LinkPullRequest(ctx, "https://github.com/colette-club/colette-api/pull/418", nil)
+			_, err := c.LinkPullRequest(ctx, "https://github.com/colette-club/colette-api/pull/418", nil, "")
 			return err
 		},
 		"show repository": func(c *api.Client) error { _, err := c.ShowRepository(ctx, "colette-api"); return err },
@@ -452,7 +452,7 @@ func TestLinkPullRequest(t *testing.T) {
 	})
 	milestone := "wish-reminders/2"
 
-	got, err := c.LinkPullRequest(context.Background(), "https://github.com/colette-club/colette-api/pull/418", &milestone)
+	got, err := c.LinkPullRequest(context.Background(), "https://github.com/colette-club/colette-api/pull/418", &milestone, "")
 
 	if err != nil || got.Repo != "colette-api" || got.Number != 418 || got.URL != "https://github.com/colette-club/colette-api/pull/418" {
 		t.Fatalf("got %+v, %v", got, err)
@@ -480,7 +480,7 @@ func TestLinkPullRequestSendsNullToUnlink(t *testing.T) {
 		io.WriteString(w, `{"repo":"colette-api","number":418,"url":"https://github.com/colette-club/colette-api/pull/418","milestone":null,"project_url":null}`)
 	})
 
-	got, err := c.LinkPullRequest(context.Background(), "https://github.com/colette-club/colette-api/pull/418", nil)
+	got, err := c.LinkPullRequest(context.Background(), "https://github.com/colette-club/colette-api/pull/418", nil, "")
 
 	if err != nil || got.Milestone != nil || got.ProjectURL != nil {
 		t.Fatalf("got %+v, %v", got, err)
@@ -508,7 +508,7 @@ func TestLinkPullRequestStatuses(t *testing.T) {
 	}
 	for _, tc := range cases {
 		c := newClient(t, reply(tc.status, tc.body))
-		if _, err := c.LinkPullRequest(context.Background(), "https://github.com/colette-club/colette-api/pull/418", nil); !tc.check(err) {
+		if _, err := c.LinkPullRequest(context.Background(), "https://github.com/colette-club/colette-api/pull/418", nil, ""); !tc.check(err) {
 			t.Errorf("%d %s: err = %v", tc.status, tc.body, err)
 		}
 	}
@@ -947,6 +947,24 @@ func TestShowRepositoryReadsAVercelTargetsName(t *testing.T) {
 	c := newClient(t, reply(200, `{"name":"colette-agents","github_full_name":"colette-club/colette-agents","targets":[{"platform":"vercel","name":"linear","settings":{},"tracked":true},{"platform":"fly","name":null,"settings":{},"tracked":true}]}`))
 	got, err := c.ShowRepository(context.Background(), "colette-agents")
 	if err != nil || len(got.Targets) != 2 || got.Targets[0].Name != "linear" || got.Targets[1].Name != "" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+}
+
+func TestLinkPullRequestSendsApp(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		if want := `{"url":"https://github.com/acme/shop-api/pull/37","milestone":"live-scores/2","app":"api"}`; string(b) != want {
+			t.Errorf("body = %s, want %s", b, want)
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, `{"repo":"match-day","number":37,"url":"https://github.com/acme/shop-api/pull/37","milestone":"live-scores/2","app":"api","project_url":"https://cadre.example/projects/live-scores"}`)
+	})
+	milestone := "live-scores/2"
+
+	got, err := c.LinkPullRequest(context.Background(), "https://github.com/acme/shop-api/pull/37", &milestone, "api")
+
+	if err != nil || got.App == nil || *got.App != "api" {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 }
