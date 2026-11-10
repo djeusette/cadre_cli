@@ -196,11 +196,16 @@ an app, and says so.
 
 A repo can have several Vercel apps, one per --name. Give each its project id
 and the folder it builds from, and set it again to change it. Vercel projects
-are found through the teams connected with cadre vercel team add.`,
+are found through the teams connected with cadre vercel team add.
+
+With neither --status-url nor --no-status-url, an app takes its platform's
+default: a Vercel project's production domain when it answers, and none on Fly,
+whose health checks count. repo set prints the URL it kept, or why it kept none.`,
 				flags: []helpRow{
 					{"--fly-app <app>", "Connect the repo to a Fly app, which cadre then tracks"},
 					{"--fly-config <file>", "The Fly config file it deploys with, for the whole team"},
 					{"--status-url <url>", "An https URL cadre checks to tell if the app is live"},
+					{"--no-status-url", "Set no status URL, not the platform's default"},
 					{"--vercel-project <id>", "Connect the repo to a Vercel project cadre tracks"},
 					{"--name <app>", "The app's name: required on Vercel, else the Fly app's"},
 					{"--vercel-dir <folder>", "The folder the app deploys from. Vercel only"},
@@ -212,6 +217,7 @@ are found through the teams connected with cadre vercel team add.`,
 					"cadre repo set shop-api --fly-app shop-api-prod --fly-config fly.staging.toml",
 					"cadre repo set shop-api --fly-app shop-api-worker --name worker",
 					"cadre repo set shop-api --fly-app shop-api --status-url https://app.test/up",
+					"cadre repo set shop-api --fly-app shop-api --no-status-url",
 					"cadre repo set shop-api --vercel-project prj_1 --name site --vercel-dir web",
 					"cadre repo set shop-site --platform render",
 				},

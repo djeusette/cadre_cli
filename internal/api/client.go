@@ -502,10 +502,13 @@ type Target struct {
 	LastDeploy *LastDeploy `json:"last_deploy"`
 	// StatusURL is the URL cadre checks to tell whether the app is live, or empty. Live is "live", "not_live",
 	// "not_checked" or empty when the target has no live state. NotLiveSince is set while Live is "not_live".
-	StatusURL    string     `json:"status_url"`
-	Live         string     `json:"live"`
-	NotLiveSince *time.Time `json:"not_live_since"`
-	Raw          []byte     `json:"-"`
+	StatusURL string `json:"status_url"`
+	// StatusURLNote says why a default that was asked for kept no status URL, as the answer to a PUT does; it is empty
+	// otherwise.
+	StatusURLNote string     `json:"status_url_note"`
+	Live          string     `json:"live"`
+	NotLiveSince  *time.Time `json:"not_live_since"`
+	Raw           []byte     `json:"-"`
 }
 
 // LastDeploy is a target's latest deploy. Commit is nil when cadre could not tie the deploy to a commit.
@@ -595,12 +598,19 @@ func (c *Client) NextDeploy(ctx context.Context, repo, app string) (NextDeploy, 
 	return next, nil
 }
 
-// SetTarget sets the repo's target on platform, replacing its settings. A non-empty statusURL is sent as the
-// top-level status_url, and a non-empty name as the top-level name; an empty one leaves its key out. The server
-// reads the platform first. It
-// returns ErrRepositoryNotFound, ErrPlatformNotConnected, ErrPlatformUnreachable, ErrUnauthorized or a
-// *ValidationError when the server refuses it.
-func (c *Client) SetTarget(ctx context.Context, repo, platform, name string, settings map[string]string, statusURL string) (Target, error) {
+// StatusURL is what a set says about a target's status URL: a non-empty URL sets it, None sets none, and the zero
+// value leaves the choice to the server, which takes the platform's default.
+type StatusURL struct {
+	URL  string
+	None bool
+}
+
+// SetTarget sets the repo's target on platform, replacing its settings. statusURL goes out as the top-level
+// status_url: the URL as a string, none as null, and the platform's default as no key at all. A non-empty name is
+// sent as the top-level name; an empty one leaves its key out. The server reads the platform first. It returns
+// ErrRepositoryNotFound, ErrPlatformNotConnected, ErrPlatformUnreachable, ErrUnauthorized or a *ValidationError when
+// the server refuses it.
+func (c *Client) SetTarget(ctx context.Context, repo, platform, name string, settings map[string]string, statusURL StatusURL) (Target, error) {
 	var target Target
 	if settings == nil {
 		settings = map[string]string{}
@@ -609,8 +619,11 @@ func (c *Client) SetTarget(ctx context.Context, repo, platform, name string, set
 	if name != "" {
 		body["name"] = name
 	}
-	if statusURL != "" {
-		body["status_url"] = statusURL
+	switch {
+	case statusURL.URL != "":
+		body["status_url"] = statusURL.URL
+	case statusURL.None:
+		body["status_url"] = nil
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {

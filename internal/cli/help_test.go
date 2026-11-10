@@ -500,3 +500,21 @@ func TestHelpFitsAnEightyColumnTerminal(t *testing.T) {
 		}
 	}
 }
+
+// The help and the README both name --no-status-url and say what an app takes without a status URL flag.
+func TestStatusURLFlagsAreDocumentedInStep(t *testing.T) {
+	srv, _ := helpServer(t)
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	said := func(text string) string { return strings.Join(strings.Fields(strings.ReplaceAll(text, "`", "")), " ") }
+
+	for name, text := range map[string]string{"help": helpFor(t, srv, "help", "repo", "set"), "README": string(readme)} {
+		for _, want := range []string{"--no-status-url", "takes its platform's default"} {
+			if !strings.Contains(said(text), want) {
+				t.Errorf("%s doesn't say %q", name, want)
+			}
+		}
+	}
+}

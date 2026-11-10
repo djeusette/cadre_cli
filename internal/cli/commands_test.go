@@ -2216,20 +2216,97 @@ func TestRepoSetWithoutStatusURLSendsNone(t *testing.T) {
 	}
 }
 
-func TestRepoSetStatusURLNeedsFlyApp(t *testing.T) {
+func TestRepoSetStatusFlagsNeedAnApp(t *testing.T) {
 	var got linkRequest
 	srv := linkServer(t, 200, repoShowBody, &got)
-	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
-
-	args := []string{"repo", "set", "colette-api", "--platform", "render", "--status-url", "https://app.test/status"}
-	if code := cli.Run(args, h.deps); code == 0 {
-		t.Errorf("code = %d", code)
-	}
-	if h.errb.String() != usageRepoSet {
-		t.Errorf("stderr = %q", h.errb)
+	for _, args := range [][]string{
+		{"repo", "set", "colette-api", "--platform", "render", "--status-url", "https://app.test/status"},
+		{"repo", "set", "colette-api", "--platform", "render", "--no-status-url"},
+		{"repo", "set", "colette-api", "--fly-app", "colette-api-prod", "--status-url", "https://app.test/status", "--no-status-url"},
+		append(slices.Clone(vercelSet), "--status-url", "https://site.test/up", "--no-status-url"),
+	} {
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != usageRepoSet {
+			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
+		}
 	}
 	if got.calls != 0 {
 		t.Errorf("the server was called: %+v", got)
+	}
+}
+
+func TestRepoSetVercelSendsStatusURL(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, vercelTargetBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run(append(slices.Clone(vercelSet), "--status-url", "https://site.test/up"), h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if got.body["status_url"] != "https://site.test/up" {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestRepoSetNoStatusURLSendsNull(t *testing.T) {
+	for name, tc := range map[string]struct {
+		args []string
+		body string
+	}{
+		"fly":    {[]string{"repo", "set", "colette-api", "--fly-app", "colette-api-prod", "--no-status-url"}, flyAppPut},
+		"vercel": {append(slices.Clone(vercelSet), "--no-status-url"), vercelTargetBody},
+	} {
+		var got linkRequest
+		srv := linkServer(t, 200, tc.body, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+		if code := cli.Run(tc.args, h.deps); code != 0 {
+			t.Fatalf("%s: code = %d, stderr %q", name, code, h.errb)
+		}
+		if value, present := got.body["status_url"]; !present || value != nil {
+			t.Errorf("%s: status_url = %v (present %v) in %+v", name, value, present, got.body)
+		}
+	}
+}
+
+func TestRepoSetPrintsTheStatusURLItKept(t *testing.T) {
+	var got linkRequest
+	body := `{"repo":"colette-site","platform":"vercel","name":"linear","settings":{"dir":"apps/linear","project":"prj_1"},"account":"colette-club","tracked":true,"status_url":"https://www.colette.club/","live":"not_checked","not_live_since":null,"status_url_note":null}`
+	srv := linkServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run(vercelSet, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if !strings.HasSuffix(h.out.String(), "\nStatus URL: https://www.colette.club/\n") {
+		t.Errorf("stdout = %q", h.out)
+	}
+}
+
+func TestRepoSetSaysWhyItKeptNoStatusURL(t *testing.T) {
+	var got linkRequest
+	body := `{"repo":"colette-site","platform":"vercel","name":"linear","settings":{"dir":"apps/linear","project":"prj_1"},"account":"colette-club","tracked":true,"status_url":null,"live":null,"not_live_since":null,"status_url_note":"mosh.colette.club answers 302, so pass --status-url"}`
+	srv := linkServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run(vercelSet, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if !strings.HasSuffix(h.out.String(), "\nNo status URL: mosh.colette.club answers 302, so pass --status-url.\n") {
+		t.Errorf("stdout = %q", h.out)
+	}
+}
+
+func TestRepoSetPrintsNoStatusLineWithoutOne(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, vercelTargetBody, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run(vercelSet, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if strings.Contains(h.out.String(), "tatus URL") {
+		t.Errorf("stdout = %q", h.out)
 	}
 }
 
@@ -2516,7 +2593,6 @@ func TestRepoSetVercelUsage(t *testing.T) {
 		{"repo", "set", "x", "--platform", "render", "--vercel-dir", "apps/linear"},
 		append(slices.Clone(vercelSet), "--fly-app", "x"),
 		append(slices.Clone(vercelSet), "--platform", "render"),
-		append(slices.Clone(vercelSet), "--status-url", "https://app.test/up"),
 		append(slices.Clone(vercelSet), "--fly-config", "fly.toml"),
 	}
 	for _, args := range cases {
