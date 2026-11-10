@@ -3405,3 +3405,163 @@ func TestGooglePlayAccountRemoveInUse(t *testing.T) {
 		t.Errorf("stderr = %q", h.errb)
 	}
 }
+
+const (
+	appStoreStore  = `{"store":"app_store","label":"App Store","app":"6443635924","account":"2X9R4HXF34","public_build":{"version":"1.8.15","build_number":6188,"since":"2026-11-02T09:40:00Z"}}`
+	googlePlayPlay = `{"store":"google_play","label":"Google Play","app":"club.colette.club","account":"cadre-reader@colette.iam.gserviceaccount.com","public_build":null}`
+	mobileBoth     = `{"repo":"club-mobile","platform":"mobile","name":"club-mobile","settings":{"app_store_app":"6443635924","play_package":"club.colette.club"},"tracked":false,"account":null,"last_deploy":null,"stores":[` + appStoreStore + `,` + googlePlayPlay + `]}`
+	mobileOneStore = `{"repo":"club-mobile","platform":"mobile","name":"club-mobile","settings":{"app_store_app":"6443635924"},"tracked":false,"account":null,"stores":[` + appStoreStore + `]}`
+)
+
+func TestRepoSetMobileApp(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, mobileBoth, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	args := []string{"repo", "set", "club-mobile", "--app-store-app", "6443635924", "--play-package", "club.colette.club"}
+	if code := cli.Run(args, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	want := "Connected club-mobile to its stores: App Store (key 2X9R4HXF34), Google Play (cadre-reader@colette.iam.gserviceaccount.com).\n" +
+		"Cadre asks each store which build is public every 15 minutes.\n"
+	if h.out.String() != want {
+		t.Errorf("stdout = %q, want %q", h.out, want)
+	}
+	settings, _ := got.body["settings"].(map[string]any)
+	if got.method != "PUT" || got.path != "/api/repositories/club-mobile/targets/mobile" || len(got.body) != 1 ||
+		len(settings) != 2 || settings["app_store_app"] != "6443635924" || settings["play_package"] != "club.colette.club" {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestRepoSetMobileAppOneStore(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, mobileOneStore, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "set", "club-mobile", "--app-store-app", "6443635924"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	want := "Connected club-mobile to its stores: App Store (key 2X9R4HXF34).\nCadre asks each store which build is public every 15 minutes.\n"
+	if h.out.String() != want {
+		t.Errorf("stdout = %q, want %q", h.out, want)
+	}
+	if settings, _ := got.body["settings"].(map[string]any); len(settings) != 1 || settings["app_store_app"] != "6443635924" {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestRepoSetMobileAppWithName(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, mobileOneStore, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "set", "club-mobile", "--play-package", "club.colette.club", "--name", "club"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	settings, _ := got.body["settings"].(map[string]any)
+	if got.body["name"] != "club" || len(settings) != 1 || settings["play_package"] != "club.colette.club" {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestRepoSetMobileAppRefusesAStatusURL(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, mobileBoth, &got)
+	cases := [][]string{
+		{"repo", "set", "x", "--app-store-app", "1", "--status-url", "https://app.test/up"},
+		{"repo", "set", "x", "--play-package", "a.b", "--no-status-url"},
+		{"repo", "set", "x", "--app-store-app", "1", "--fly-app", "x"},
+		{"repo", "set", "x", "--play-package", "a.b", "--vercel-project", "prj_1", "--name", "web", "--vercel-dir", "web"},
+		{"repo", "set", "x", "--app-store-app", "1", "--platform", "render"},
+		{"repo", "set", "x", "--app-store-app", "1", "--fly-config", "fly.toml"},
+		{"repo", "set", "x", "--app-store-app", "1", "--vercel-dir", "web"},
+		{"repo", "set", "x", "--app-store-app"},
+	}
+	for _, args := range cases {
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != usageRepoSet {
+			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
+		}
+	}
+	if got.calls != 0 {
+		t.Errorf("the server was called: %+v", got)
+	}
+}
+
+func TestRepoSetPlatformMobileHasItsOwnFlags(t *testing.T) {
+	for _, platform := range []string{"mobile", "Mobile", "MOBILE"} {
+		var got linkRequest
+		srv := linkServer(t, 200, mobileBoth, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+		if code := cli.Run([]string{"repo", "set", "club-mobile", "--platform", platform}, h.deps); code != 1 {
+			t.Errorf("%s: code = %d", platform, code)
+		}
+		if want := "A mobile app has its own flags: cadre repo set club-mobile --app-store-app <id> --play-package <name>.\n"; h.errb.String() != want {
+			t.Errorf("%s: stderr = %q, want %q", platform, h.errb, want)
+		}
+		if got.calls != 0 {
+			t.Errorf("%s: the server was called: %+v", platform, got)
+		}
+	}
+}
+
+func TestRepoSetMobileAppNobodyReadsIt(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 422, `{"errors":[{"path":"settings.app_store_app","message":"no App Store key reads app 6443635924"}]}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "set", "club-mobile", "--app-store-app", "6443635924"}, h.deps); code != 1 {
+		t.Fatalf("code = %d", code)
+	}
+	if want := "settings.app_store_app: no App Store key reads app 6443635924\n"; h.errb.String() != want || h.out.Len() != 0 {
+		t.Errorf("stderr = %q, stdout = %q", h.errb, h.out)
+	}
+}
+
+func TestRepoShowMobileApp(t *testing.T) {
+	var got linkRequest
+	body := `{"name":"club-mobile","github_full_name":"colette-club/club-mobile","targets":[` +
+		`{"platform":"mobile","name":"club-mobile","settings":{"app_store_app":"6443635924","play_package":"club.colette.club"},"tracked":false,"account":null,"stores":[` +
+		appStoreStore + `,` + googlePlayPlay + `]}]}`
+	srv := linkServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "show", "club-mobile"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	want := "club-mobile (colette-club/club-mobile)\n" +
+		"  Mobile  club-mobile, app_store_app 6443635924, play_package club.colette.club\n" +
+		"    App Store     1.8.15 (6188) public since Nov 2, 09:40 · key 2X9R4HXF34\n" +
+		"    Google Play   no public build seen yet · cadre-reader@colette.iam.gserviceaccount.com\n"
+	if h.out.String() != want {
+		t.Errorf("stdout = %q, want %q", h.out, want)
+	}
+}
+
+func TestRepoShowMobileAppBuildWithNoVersion(t *testing.T) {
+	var got linkRequest
+	store := `{"store":"google_play","label":"Google Play","app":"club.colette.club","account":"cadre-reader@colette.iam.gserviceaccount.com","public_build":{"version":null,"build_number":6185,"since":"2026-11-02T10:05:00+01:00"}}`
+	body := `{"name":"club-mobile","github_full_name":"colette-club/club-mobile","targets":[{"platform":"mobile","name":"club-mobile","settings":{},"tracked":false,"account":null,"stores":[` + store + `]}]}`
+	srv := linkServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "show", "club-mobile"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "    Google Play   6185 public since Nov 2, 09:05 · cadre-reader@colette.iam.gserviceaccount.com\n"; !strings.Contains(h.out.String(), want) {
+		t.Errorf("stdout = %q, want it to hold %q", h.out, want)
+	}
+}
+
+func TestRepoShowMobileAppJSON(t *testing.T) {
+	var got linkRequest
+	body := `{"name":"club-mobile","github_full_name":"colette-club/club-mobile","targets":[` + mobileBoth + `]}`
+	srv := linkServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "show", "club-mobile", "--json"}, h.deps); code != 0 || h.out.String() != body {
+		t.Errorf("code = %d, stdout = %q", code, h.out)
+	}
+}

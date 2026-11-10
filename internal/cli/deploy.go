@@ -91,6 +91,9 @@ func deploy(ctx context.Context, s *session, repo string, flags deployFlags) int
 	if err != nil {
 		return s.repoFailure(err, repo, "")
 	}
+	if throughStores(shown, flags) {
+		return fail(s.env, fmt.Errorf("%s's releases go through the stores.", oneLine(shown.Name)))
+	}
 	targets, err := pickTargets(shown, flags)
 	if err != nil {
 		return fail(s.env, err)
@@ -100,6 +103,16 @@ func deploy(ctx context.Context, s *session, repo string, flags deployFlags) int
 		return vercelDeploy(ctx, s, d, flags)
 	}
 	return deployFlyApps(ctx, s, &d, flags)
+}
+
+// throughStores reports whether the deploy is for a mobile app, whose releases go through the stores: --app names one,
+// or every app the repo has is one. A repo with other apps beside it deploys those.
+func throughStores(repo api.Repository, flags deployFlags) bool {
+	isMobile := func(t api.Target) bool { return t.Platform == "mobile" }
+	if flags.app != "" {
+		return slices.ContainsFunc(repo.Targets, func(t api.Target) bool { return isMobile(t) && appName(t) == flags.app })
+	}
+	return len(repo.Targets) > 0 && !slices.ContainsFunc(repo.Targets, func(t api.Target) bool { return !isMobile(t) })
 }
 
 // pickTargets is the apps the deploy takes, from those cadre deploy can deploy. With none it takes none, so the Fly

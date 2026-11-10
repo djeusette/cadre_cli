@@ -13,7 +13,7 @@ import (
 
 // runRepo dispatches `repo set <repo> (--fly-app <app> [--name <app>] [--fly-config <file>]
 // [--status-url <url>|--no-status-url]|--vercel-project <id> --name <app> --vercel-dir <folder>
-// [--status-url <url>|--no-status-url]|--platform <name>)`,
+// [--status-url <url>|--no-status-url]|--platform <name>|[--app-store-app <id>] [--play-package <name>] [--name <app>])`,
 // `repo unset <repo> (--name <app>|--platform <name> [--name <app>])` and `repo show <repo>`.
 func runRepo(env Env, asJSON bool, args []string) int {
 	if len(args) == 0 {
@@ -51,6 +51,7 @@ func runRepo(env Env, asJSON bool, args []string) int {
 type repoSetFlags struct {
 	flyApp, flyConfig, statusURL, platform string
 	vercelProject, name, vercelDir         string
+	appStoreApp, playPackage               string
 	noStatusURL                            bool
 }
 
@@ -65,6 +66,7 @@ func takeRepoSetFlags(args []string) (repoSetFlags, []string, bool) {
 	}{
 		{"--fly-app", &f.flyApp}, {"--fly-config", &f.flyConfig}, {"--status-url", &f.statusURL}, {"--platform", &f.platform},
 		{"--vercel-project", &f.vercelProject}, {"--name", &f.name}, {"--vercel-dir", &f.vercelDir},
+		{"--app-store-app", &f.appStoreApp}, {"--play-package", &f.playPackage},
 	} {
 		var ok bool
 		if *flag.into, args, ok = takeFlag(args, flag.name); !ok {
@@ -73,7 +75,7 @@ func takeRepoSetFlags(args []string) (repoSetFlags, []string, bool) {
 	}
 	args, f.noStatusURL = splitBoolFlag(args, "--no-status-url")
 	forms := 0
-	for _, v := range []string{f.flyApp, f.vercelProject, f.platform} {
+	for _, v := range []string{f.flyApp, f.vercelProject, f.platform, f.mobileForm()} {
 		if v != "" {
 			forms++
 		}
@@ -84,9 +86,17 @@ func takeRepoSetFlags(args []string) (repoSetFlags, []string, bool) {
 		(f.vercelProject != "" || f.flyApp != "" || !setsStatusURL) &&
 		(f.statusURL == "" || !f.noStatusURL) &&
 		(f.vercelProject != "" || f.vercelDir == "") &&
-		(f.vercelProject != "" || f.flyApp != "" || f.name == "") &&
+		(f.vercelProject != "" || f.flyApp != "" || f.mobileForm() != "" || f.name == "") &&
 		(f.vercelProject == "" || (f.name != "" && f.vercelDir != "" && f.flyConfig == ""))
 	return f, args, valid
+}
+
+// mobileForm is "mobile" when a store's flag is given, else empty.
+func (f repoSetFlags) mobileForm() string {
+	if f.appStoreApp != "" || f.playPackage != "" {
+		return "mobile"
+	}
+	return ""
 }
 
 func runRepoSet(env Env, asJSON bool, args []string) int {
@@ -103,6 +113,14 @@ func runRepoSet(env Env, asJSON bool, args []string) int {
 		}
 	case f.vercelProject != "":
 		platform, settings["project"], settings["dir"] = "vercel", f.vercelProject, f.vercelDir
+	case f.mobileForm() != "":
+		platform = "mobile"
+		if f.appStoreApp != "" {
+			settings["app_store_app"] = f.appStoreApp
+		}
+		if f.playPackage != "" {
+			settings["play_package"] = f.playPackage
+		}
 	}
 	return runCommand(env, asJSON, "repo set", rest, 1, func(ctx context.Context, s *session, a []string) int {
 		switch {
@@ -111,6 +129,9 @@ func runRepoSet(env Env, asJSON bool, args []string) int {
 			return 1
 		case f.platform != "" && strings.EqualFold(platform, "vercel"):
 			fmt.Fprintf(s.env.Stderr, "Vercel has its own flags: cadre repo set %s --vercel-project <id> --name <app> --vercel-dir <folder>.\n", a[0])
+			return 1
+		case f.platform != "" && strings.EqualFold(platform, "mobile"):
+			fmt.Fprintf(s.env.Stderr, "A mobile app has its own flags: cadre repo set %s --app-store-app <id> --play-package <name>.\n", a[0])
 			return 1
 		}
 		return setTarget(ctx, s, a[0], platform, f.name, settings, api.StatusURL{URL: f.statusURL, None: f.noStatusURL})
@@ -130,6 +151,9 @@ func setTarget(ctx context.Context, s *session, repo, platform, name string, set
 	switch {
 	case s.asJSON:
 		fmt.Fprint(s.env.Stdout, string(target.Raw))
+	case target.Platform == "mobile":
+		fmt.Fprintf(s.env.Stdout, "Connected %s to its stores: %s.\nCadre asks each store which build is public every 15 minutes.\n",
+			target.Repo, storeList(target.Stores))
 	case target.Tracked:
 		fmt.Fprintln(s.env.Stdout, connectedLine(target))
 		if platform == "fly" && name == "" {
@@ -142,6 +166,23 @@ func setTarget(ctx context.Context, s *session, repo, platform, name string, set
 		fmt.Fprintf(s.env.Stdout, "cadre can't read %s deploys yet, so %s shows as not tracked.\n", displayName(target.Platform), target.Repo)
 	}
 	return 0
+}
+
+// storeList is a mobile app's stores, each with the account reading it, as the line after a set names them.
+func storeList(stores []api.TargetStore) string {
+	items := make([]string, len(stores))
+	for i, st := range stores {
+		items[i] = oneLine(st.Label) + " (" + storeAccount(st) + ")"
+	}
+	return strings.Join(items, ", ")
+}
+
+// storeAccount is the account reading a store: an App Store key says so, a Google Play account is its email alone.
+func storeAccount(st api.TargetStore) string {
+	if st.Store == "app_store" {
+		return "key " + oneLine(st.Account)
+	}
+	return oneLine(st.Account)
 }
 
 // statusKeptLine is what set says about the status URL the server kept, or why it kept none; empty when there is
@@ -321,13 +362,44 @@ func repositoryText(repo api.Repository) string {
 		if line := statusLine(t); line != "" {
 			fmt.Fprintf(&b, "  %s\n", line)
 		}
+		b.WriteString(storeLines(t.Stores))
 	}
 	return b.String()
+}
+
+// storeLines is a line under a mobile target for each of its stores: the label padded to the longest, with Google
+// Play's length as the least, the build that is public there and the account reading it.
+func storeLines(stores []api.TargetStore) string {
+	width := len("Google Play")
+	for _, st := range stores {
+		width = max(width, len(oneLine(st.Label)))
+	}
+	var b strings.Builder
+	for _, st := range stores {
+		fmt.Fprintf(&b, "    %-*s   %s · %s\n", width, oneLine(st.Label), publicBuildText(st.PublicBuild), storeAccount(st))
+	}
+	return b.String()
+}
+
+// publicBuildText says which build is public in a store and since when, in UTC; a build with no version shows its
+// number alone.
+func publicBuildText(b *api.StoreBuild) string {
+	switch {
+	case b == nil:
+		return "no public build seen yet"
+	case b.Version == nil:
+		return fmt.Sprintf("%d public since %s", b.BuildNumber, b.Since.UTC().Format("Jan 2, 15:04"))
+	default:
+		return fmt.Sprintf("%s (%d) public since %s", oneLine(*b.Version), b.BuildNumber, b.Since.UTC().Format("Jan 2, 15:04"))
+	}
 }
 
 // targetState is what show says about a target: its name if it has one, its settings as `key value` pairs sorted by
 // key, the org (team, on Vercel) reading it and its last deploy; or that it is not tracked.
 func targetState(t api.Target) string {
+	if t.Platform == "mobile" {
+		return mobileState(t)
+	}
 	if !t.Tracked {
 		return "not tracked"
 	}
@@ -342,6 +414,20 @@ func targetState(t api.Target) string {
 		pairs = append(pairs, accountKind(t.Platform)+" "+oneLine(*t.Account))
 	}
 	pairs = append(pairs, lastDeployText(t.LastDeploy))
+	return strings.Join(pairs, ", ")
+}
+
+// mobileState is what show says on a mobile target's own line: its name, then its settings sorted by key. Whether the
+// stores see a build is the lines under it; "not tracked" would hide that, and the commit a build was made from is
+// not known yet.
+func mobileState(t api.Target) string {
+	var pairs []string
+	if t.Name != "" {
+		pairs = append(pairs, oneLine(t.Name))
+	}
+	for _, key := range slices.Sorted(maps.Keys(t.Settings)) {
+		pairs = append(pairs, oneLine(key)+" "+setting(t, key))
+	}
 	return strings.Join(pairs, ", ")
 }
 

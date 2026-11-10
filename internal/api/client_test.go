@@ -1125,3 +1125,33 @@ func TestAccountNameIsOnePathSegment(t *testing.T) {
 		t.Errorf("paths = %q, want %q", paths, want)
 	}
 }
+
+func TestSetTargetDecodesStores(t *testing.T) {
+	body := `{"repo":"club-mobile","platform":"mobile","name":"club-mobile","settings":{"app_store_app":"6443635924"},"tracked":false,"account":null,"stores":[` +
+		`{"store":"app_store","label":"App Store","app":"6443635924","account":"2X9R4HXF34","public_build":{"version":"1.8.15","build_number":6188,"since":"2026-11-02T09:40:00Z"}},` +
+		`{"store":"google_play","label":"Google Play","app":"club.colette.club","account":"cadre-reader@colette.iam.gserviceaccount.com","public_build":{"version":null,"build_number":6185,"since":"2026-11-02T09:40:00Z"}},` +
+		`{"store":"other","label":"Other","app":"x","account":"y","public_build":null}]}`
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		io.WriteString(w, body)
+	})
+
+	got, err := c.SetTarget(context.Background(), "club-mobile", "mobile", "", map[string]string{"app_store_app": "6443635924"}, api.StatusURL{})
+
+	if err != nil || len(got.Stores) != 3 {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	first, second, third := got.Stores[0], got.Stores[1], got.Stores[2]
+	if first.Store != "app_store" || first.Label != "App Store" || first.App != "6443635924" || first.Account != "2X9R4HXF34" {
+		t.Errorf("first = %+v", first)
+	}
+	if b := first.PublicBuild; b == nil || b.Version == nil || *b.Version != "1.8.15" || b.BuildNumber != 6188 || b.Since.Format(time.RFC3339) != "2026-11-02T09:40:00Z" {
+		t.Errorf("first build = %+v", first.PublicBuild)
+	}
+	if b := second.PublicBuild; b == nil || b.Version != nil || b.BuildNumber != 6185 {
+		t.Errorf("second build = %+v", second.PublicBuild)
+	}
+	if third.PublicBuild != nil {
+		t.Errorf("third build = %+v", third.PublicBuild)
+	}
+}

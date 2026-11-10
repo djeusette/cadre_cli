@@ -187,6 +187,7 @@ hand changes with it.`,
 					"<repo> --fly-app <app> [--name <app>] [--fly-config <file>]",
 					"<repo> --vercel-project <id> --name <app> --vercel-dir <folder>",
 					"<repo> --platform <name>",
+					"<repo> [--app-store-app <id>] [--play-package <name>]",
 				},
 				about: `<repo> is the repo's name in Cadre, such as shop-api. Setting an app again (the
 same name) replaces its settings, so pass --fly-app, --fly-config and
@@ -206,7 +207,13 @@ With neither --status-url nor --no-status-url, an app takes its platform's
 default: a Vercel project's production domain when it answers, and none on Fly,
 whose health checks count. repo set prints the URL it kept, or why it kept none.
 Setting a Vercel app with no status URL can take a few seconds while cadre calls
-its domain.`,
+its domain.
+
+A mobile app is sold on the App Store, Google Play or both. Give its App Store
+id, its Google Play package, or both: cadre then asks each store, every 15
+minutes, which build is public, through the keys connected with cadre app-store
+key add and cadre google-play account add. repo show lists each store's build.
+--name names the app, as for Fly. A mobile app takes no status URL.`,
 				flags: []helpRow{
 					{"--fly-app <app>", "Connect the repo to a Fly app, which cadre then tracks"},
 					{"--fly-config <file>", "The Fly config file it deploys with, for the whole team"},
@@ -215,6 +222,8 @@ its domain.`,
 					{"--vercel-project <id>", "Connect the repo to a Vercel project cadre tracks"},
 					{"--name <app>", "The app's name: required on Vercel, else the Fly app's"},
 					{"--vercel-dir <folder>", "The folder the app deploys from. Vercel only"},
+					{"--app-store-app <id>", "Connect a mobile app to its App Store app"},
+					{"--play-package <name>", "Connect a mobile app to its Google Play package"},
 					{"--platform <name>", "Name any other platform, which shows as not tracked"},
 					jsonFlag,
 				},
@@ -225,6 +234,8 @@ its domain.`,
 					"cadre repo set shop-api --fly-app shop-api --status-url https://app.test/up",
 					"cadre repo set shop-api --fly-app shop-api --no-status-url",
 					"cadre repo set shop-api --vercel-project prj_1 --name site --vercel-dir web",
+					"cadre repo set club-app --app-store-app 6443635924",
+					"cadre repo set club-app --play-package club.colette.club --name club",
 					"cadre repo set shop-site --platform render",
 				},
 			},
@@ -256,7 +267,9 @@ the repo's target there, when the repo has one app on it.`,
 whether cadre can track it, and its last deploy: the date in UTC and the commit.
 A Vercel target starts with its name, and so does a Fly app whose name isn't its
 Fly app's. A line under the target gives its status URL, if it has one, and
-whether the app is live: live, not live since when, or not checked yet.`,
+whether the app is live: live, not live since when, or not checked yet. Under a
+mobile app, a line per store gives the build that is public there and since
+when, in UTC, and the key or service account that reads it.`,
 				flags:    []helpRow{jsonFlag},
 				examples: []string{"cadre repo show shop-api"},
 			},
@@ -376,7 +389,11 @@ first app deploys. It asks the same, in one question, when the commit lacks
 what a Vercel app runs now. With nothing to read, the answer is no. If Cadre
 can't say what is open or Blocked, nothing deploys. Right before fly or vercel
 runs, cadre checks the commit and the working tree again, and for Fly the
-branch, so a change made in the meantime stops the deploy.`,
+branch, so a change made in the meantime stops the deploy.
+
+A mobile app deploys nothing: its releases go through the stores. For a repo
+whose apps are all mobile, or with --app naming a mobile app, cadre says so
+and exits 1 before it looks at git. A repo with other apps deploys those.`,
 				flags: []helpRow{
 					{"--app <name>", "Deploy that app alone, by its name in Cadre"},
 					{"--all", "Deploy every app of the repo"},

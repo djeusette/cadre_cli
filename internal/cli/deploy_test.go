@@ -2034,3 +2034,44 @@ func TestDeployBlockedWithNoNameReadsAsAnEarlierStep(t *testing.T) {
 		t.Errorf("stdout = %q, want %q", r.h.out, want)
 	}
 }
+
+const (
+	mobileTarget       = `{"platform":"mobile","name":"club-mobile","settings":{"app_store_app":"6443635924"},"tracked":false,"account":null,"stores":[]}`
+	refusedMobileStore = "colette-api's releases go through the stores.\n"
+)
+
+// A mobile app's releases are the stores' business: deploy says so before it looks at git, and runs nothing.
+func TestDeployMobileAppGoesThroughTheStores(t *testing.T) {
+	r := newDeployRig(t)
+	r.targets = mobileTarget
+	r.write(r.clone, "dirty.txt", "dirty")
+
+	code := r.deploy()
+
+	r.assertRefused(code, refusedMobileStore)
+}
+
+func TestDeployAppNamingAMobileApp(t *testing.T) {
+	r := newDeployRig(t)
+	r.targets = flyTarget + "," + mobileTarget
+	r.write(r.clone, "dirty.txt", "dirty")
+
+	code := r.deploy("--app", "club-mobile")
+
+	r.assertRefused(code, refusedMobileStore)
+}
+
+func TestDeployARepoWithAFlyAppAndAMobileApp(t *testing.T) {
+	r := newDeployRig(t)
+	r.targets = flyTarget + "," + mobileTarget
+	sha := r.head()
+
+	code := r.deploy()
+
+	if code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+	}
+	if got, want := r.flyDeploys(), []string{"deploy --app colette-api-prod --config fly.toml --image-label " + sha}; !slices.Equal(got, want) {
+		t.Errorf("fly ran %q, want %q", got, want)
+	}
+}
