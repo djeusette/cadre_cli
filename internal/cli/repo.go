@@ -11,8 +11,9 @@ import (
 	"github.com/djeusette/cadre_cli/internal/api"
 )
 
-// runRepo dispatches `repo set <repo> (--fly-app <app> [--name <app>] [--fly-config <file>] [--status-url <url>|--no-status-url]
-// |--vercel-project <id> --name <app> --vercel-dir <folder>|--platform <name>)`,
+// runRepo dispatches `repo set <repo> (--fly-app <app> [--name <app>] [--fly-config <file>]
+// [--status-url <url>|--no-status-url]|--vercel-project <id> --name <app> --vercel-dir <folder>
+// [--status-url <url>|--no-status-url]|--platform <name>)`,
 // `repo unset <repo> (--name <app>|--platform <name> [--name <app>])` and `repo show <repo>`.
 func runRepo(env Env, asJSON bool, args []string) int {
 	if len(args) == 0 {

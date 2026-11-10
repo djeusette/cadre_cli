@@ -1086,3 +1086,23 @@ func TestSetTargetReadsTheStatusURLNote(t *testing.T) {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 }
+
+// A set of a Vercel app with no status URL has the server read the project's domains and call one, which can take
+// longer than the other calls' timeout; the client must not give up on it first.
+func TestSetTargetWaitsLongerThanOtherCalls(t *testing.T) {
+	api.SetTimeouts(t, 50*time.Millisecond, 3*time.Second)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"repo":"colette-api","platform":"vercel","settings":{},"tracked":true}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := &api.Client{BaseURL: srv.URL, APIKey: "cadre_secret", UserAgent: "cadre-cli/test"}
+
+	if _, err := c.SetTarget(context.Background(), "colette-api", "vercel", "", nil, api.StatusURL{}); err != nil {
+		t.Errorf("SetTarget: %v", err)
+	}
+	if _, err := c.UnsetTarget(context.Background(), "colette-api", "vercel", ""); err == nil {
+		t.Error("UnsetTarget was not cut off at the default timeout")
+	}
+}

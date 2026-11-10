@@ -2202,7 +2202,7 @@ func TestRepoSetSendsStatusURL(t *testing.T) {
 	}
 }
 
-func TestRepoSetWithoutStatusURLSendsNone(t *testing.T) {
+func TestRepoSetWithoutStatusFlagsLeavesTheKeyOut(t *testing.T) {
 	var got linkRequest
 	body := `{"repo":"colette-api","platform":"fly","settings":{"app":"colette-api-prod"},"tracked":true,"account":"colette"}`
 	srv := linkServer(t, 200, body, &got)
@@ -3020,5 +3020,44 @@ func TestRepoSetSaysNothingForOneFlyAppBesideAVercelApp(t *testing.T) {
 	}
 	if strings.Contains(h.out.String(), "now has") {
 		t.Errorf("stdout = %q", h.out)
+	}
+}
+
+func TestRepoSetPrintsTheStatusLinesOnOneLine(t *testing.T) {
+	for name, tc := range map[string]struct {
+		fields string
+		want   string
+	}{
+		"url":  {`"status_url":"https://a\u001b[2Jpp.test/\nFake: line","status_url_note":null`, "\nStatus URL: https://a [2Jpp.test/ Fake: line\n"},
+		"note": {`"status_url":null,"status_url_note":"it answers\u001b[2J 302\nFake: line"`, "\nNo status URL: it answers [2J 302 Fake: line.\n"},
+	} {
+		var got linkRequest
+		body := `{"repo":"colette-site","platform":"vercel","name":"linear","settings":{"dir":"apps/linear","project":"prj_1"},"account":"colette-club","tracked":true,` + tc.fields + `}`
+		srv := linkServer(t, 200, body, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+		if code := cli.Run(vercelSet, h.deps); code != 0 {
+			t.Fatalf("%s: code = %d, stderr %q", name, code, h.errb)
+		}
+		if !strings.HasSuffix(h.out.String(), tc.want) {
+			t.Errorf("%s: stdout = %q, want suffix %q", name, h.out, tc.want)
+		}
+	}
+}
+
+func TestRepoSetPrintsTheStatusLineAfterTheSeveralAppsLine(t *testing.T) {
+	var got []linkRequest
+	put := `{"repo":"colette-api","platform":"fly","name":"other-app","settings":{"app":"other-app"},"tracked":true,"account":"colette","status_url":"https://app.test/up","status_url_note":null}`
+	srv := severalAppsServer(t, put, flyShow("other-app", "colette-api-prod"), &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "set", "colette-api", "--fly-app", "other-app", "--status-url", "https://app.test/up"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	want := "Connected colette-api to the Fly app other-app, in the colette org. It deploys with fly.production.toml, else fly.toml.\n" +
+		"colette-api now has 2 apps: colette-api-prod, other-app. To move an app instead, pass --name <app>.\n" +
+		"Status URL: https://app.test/up\n"
+	if h.out.String() != want {
+		t.Errorf("stdout = %q, want %q", h.out, want)
 	}
 }

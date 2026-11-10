@@ -216,8 +216,16 @@ type Linked struct {
 
 const (
 	maxResponseBytes = 1 << 20
-	defaultTimeout   = 15 * time.Second
 	maxRetryAfter    = 24 * time.Hour
+)
+
+// Timeouts of the client's own http.Client. They are variables so tests can shorten them.
+var (
+	defaultTimeout = 15 * time.Second
+	// setTargetTimeout is longer because cadre may be waking from zero, and a Vercel app set with no status URL has
+	// the server read the project's domains and call one, which it gives up on after 10 seconds. Timing out sooner
+	// would report a failure for a set cadre may have saved.
+	setTargetTimeout = 30 * time.Second
 )
 
 // Client talks to one Cadre server. APIKey may be empty for the login calls.
@@ -629,7 +637,7 @@ func (c *Client) SetTarget(ctx context.Context, repo, platform, name string, set
 	if err != nil {
 		return target, err
 	}
-	status, resp, err := c.do(ctx, http.MethodPut, targetPath(repo, platform), payload)
+	status, resp, err := c.send(ctx, setTargetTimeout, http.MethodPut, targetPath(repo, platform), payload)
 	if err != nil {
 		return target, err
 	}
@@ -847,6 +855,11 @@ func validationError(status int, body []byte) error {
 // do sends one request and returns the status and body. The key goes only in the Authorization header.
 // A 429 also returns a *RateLimitedError, whatever the call.
 func (c *Client) do(ctx context.Context, method, path string, payload []byte) (int, []byte, error) {
+	return c.send(ctx, defaultTimeout, method, path, payload)
+}
+
+// send is do with the timeout an http.Client of ours waits for the answer; a Client whose HTTP is set keeps its own.
+func (c *Client) send(ctx context.Context, timeout time.Duration, method, path string, payload []byte) (int, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.BaseURL, "/")+path, bytes.NewReader(payload))
 	if err != nil {
 		return 0, nil, err
@@ -858,7 +871,7 @@ func (c *Client) do(ctx context.Context, method, path string, payload []byte) (i
 		req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	}
 
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.httpClient(timeout).Do(req)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -892,9 +905,9 @@ func (c *Client) unexpected(status int, err error) error {
 	return fmt.Errorf("unexpected response from %s (status %d): %w", c.BaseURL, status, err)
 }
 
-func (c *Client) httpClient() *http.Client {
+func (c *Client) httpClient(timeout time.Duration) *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
-	return &http.Client{Timeout: defaultTimeout}
+	return &http.Client{Timeout: timeout}
 }

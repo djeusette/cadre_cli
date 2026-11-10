@@ -200,7 +200,9 @@ are found through the teams connected with cadre vercel team add.
 
 With neither --status-url nor --no-status-url, an app takes its platform's
 default: a Vercel project's production domain when it answers, and none on Fly,
-whose health checks count. repo set prints the URL it kept, or why it kept none.`,
+whose health checks count. repo set prints the URL it kept, or why it kept none.
+Setting a Vercel app with no status URL can take a few seconds while cadre calls
+its domain.`,
 				flags: []helpRow{
 					{"--fly-app <app>", "Connect the repo to a Fly app, which cadre then tracks"},
 					{"--fly-config <file>", "The Fly config file it deploys with, for the whole team"},
