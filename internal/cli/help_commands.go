@@ -16,6 +16,10 @@ var helpGroups = []groupHelp{
 	{"fly org", "Connect Fly orgs, so cadre can read their apps' deploys"},
 	{"vercel", "Connect Vercel teams, so cadre can read their apps' deploys"},
 	{"vercel team", "Connect Vercel teams, so cadre can read their apps' deploys"},
+	{"app-store", "Connect App Store Connect keys, so cadre can read an app's public build"},
+	{"app-store key", "Connect App Store Connect keys, so cadre can read an app's public build"},
+	{"google-play", "Connect Google Play service accounts, so cadre can read an app's public build"},
+	{"google-play account", "Connect Google Play service accounts, so cadre can read an app's public build"},
 }
 
 // helpSections is every command, in the overview's order.
@@ -48,7 +52,7 @@ that URL, and only that one.`,
 		commands: []commandHelp{
 			{
 				name:    "project create",
-				summary: "Register a project and its milestones from a JSON file",
+				summary: "Register a project and its milestones from JSON",
 				forms:   []string{"<file>"},
 				about: `Each milestone's repos are its deploy order, and its spec is markdown. Only
 name, slug, end_goal and each milestone's title and repos are required:
@@ -72,7 +76,7 @@ name, slug, end_goal and each milestone's title and repos are required:
 			},
 			{
 				name:    "project pull",
-				summary: "Print a project as the JSON file project update takes",
+				summary: "Print a project as the JSON project update takes",
 				forms:   []string{"<slug> [-o <file>]"},
 				about:   "The file has the version and milestone numbers that update needs.",
 				flags: []helpRow{
@@ -132,7 +136,7 @@ wish-reminders/2. The spec comes exactly as stored.`,
 			},
 			{
 				name:    "spec push",
-				summary: "Upload a markdown file as a milestone's newest spec",
+				summary: "Upload a markdown file as a milestone's spec",
 				forms:   []string{"<project>/<n> <file> [--base <version>]"},
 				about: `<project>/<n> is a project's slug and a milestone number, such as
 wish-reminders/2. The file is stored unchanged, and cadre prints the project's
@@ -294,8 +298,46 @@ history. Adding a team again replaces its token.`,
 				examples: []string{"cadre vercel team remove colette-club"},
 			},
 			{
+				name:    "app-store key add",
+				summary: "Connect an App Store Connect API key",
+				forms:   []string{"<key-id> --issuer <issuer-id>"},
+				about: `The key is made in App Store Connect, under Users and Access, Integrations. Its
+key ID and the issuer ID are shown there, and its .p8 file downloads once. Cadre
+asks for the file's path, or reads the file's text from stdin. The key is never
+an argument, so it stays out of your shell history. Adding a key again replaces
+it.`,
+				flags:    []helpRow{{"--issuer <issuer-id>", "The issuer ID shown in App Store Connect. Required"}, jsonFlag},
+				examples: []string{"cadre app-store key add 2X9R4HXF34 --issuer 69a6de70-0000-47e3"},
+			},
+			{
+				name:     "app-store key remove",
+				summary:  "Disconnect an App Store Connect API key",
+				forms:    []string{"<key-id>"},
+				about:    "Refused while a repo's target still reads the key.",
+				flags:    []helpRow{jsonFlag},
+				examples: []string{"cadre app-store key remove 2X9R4HXF34"},
+			},
+			{
+				name:    "google-play account add",
+				summary: "Connect a Google Play service account",
+				about: `Pass the service account's JSON key file: cadre asks for its path, or reads its
+text from stdin. The account is named by the file's client_email. The key is
+never an argument, so it stays out of your shell history. Adding an account
+again replaces its key.`,
+				flags:    []helpRow{jsonFlag},
+				examples: []string{"cadre google-play account add < cadre-reader-key.json"},
+			},
+			{
+				name:     "google-play account remove",
+				summary:  "Disconnect a Google Play service account",
+				forms:    []string{"<email>"},
+				about:    "Refused while a repo's target still reads the account.",
+				flags:    []helpRow{jsonFlag},
+				examples: []string{"cadre google-play account remove cadre-reader@colette.iam.gserviceaccount.com"},
+			},
+			{
 				name:    "deploy",
-				summary: "Deploy a repo's Fly or Vercel apps, from a checkout of it",
+				summary: "Deploy a repo's Fly or Vercel apps from a checkout",
 				forms:   []string{"<repo> [--app <name>|--all] [--yes]"},
 				about: `<repo> is the repo's name in Cadre, such as shop-api. Run it anywhere in a
 checkout of that repo. A repo with one app needs no flag. A repo with several

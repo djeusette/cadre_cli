@@ -59,6 +59,13 @@ func addAccount(ctx context.Context, s *session, platform, noun, name string) in
 		return 1
 	}
 
+	return sendAccount(ctx, s, platform, noun, name, token, func(added api.Account) string {
+		return fmt.Sprintf("Connected the %s %s %s: its token reads %s.", displayName(platform), noun, added.Name, apps(added.Apps))
+	})
+}
+
+// sendAccount sends the token for the platform's account name and prints connected's line, or the answer as JSON.
+func sendAccount(ctx context.Context, s *session, platform, noun, name, token string, connected func(api.Account) string) int {
 	added, err := s.client.AddAccount(ctx, platform, name, token)
 	if err != nil {
 		return s.accountFailure(err, platform, noun, name)
@@ -68,7 +75,7 @@ func addAccount(ctx context.Context, s *session, platform, noun, name string) in
 		fmt.Fprint(s.env.Stdout, string(added.Raw))
 		return 0
 	}
-	fmt.Fprintf(s.env.Stdout, "Connected the %s %s %s: its token reads %s.\n", displayName(platform), noun, added.Name, apps(added.Apps))
+	fmt.Fprintln(s.env.Stdout, connected(added))
 	return 0
 }
 
@@ -103,7 +110,7 @@ func (s *session) accountFailure(err error, platform, noun, name string) int {
 	var inUse *api.AccountInUseError
 	switch {
 	case errors.Is(err, api.ErrTokenRefused):
-		fmt.Fprintf(s.env.Stderr, "%s refused this token for %s.\n", display, name)
+		fmt.Fprint(s.env.Stderr, tokenRefused(platform, name))
 	case errors.Is(err, api.ErrOrgNotFound):
 		fmt.Fprintf(s.env.Stderr, "%s has no %s %s that this token can read.\n", display, noun, name)
 	case errors.Is(err, api.ErrAccountNotFound):
@@ -118,6 +125,17 @@ func (s *session) accountFailure(err error, platform, noun, name string) int {
 		return s.failAPI(err)
 	}
 	return 1
+}
+
+// tokenRefused says a platform refused the credentials of an account.
+func tokenRefused(platform, name string) string {
+	switch platform {
+	case "app_store":
+		return fmt.Sprintf("Apple refused the key %s. Check its key ID, its issuer ID and its .p8 file.\n", name)
+	case "google_play":
+		return "Google refused this service account's key.\n"
+	}
+	return fmt.Sprintf("%s refused this token for %s.\n", displayName(platform), name)
 }
 
 // readToken is the token for the named account, trimmed. When stdin is piped it is read whole. On a terminal the

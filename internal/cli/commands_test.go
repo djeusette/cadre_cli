@@ -3061,3 +3061,347 @@ func TestRepoSetPrintsTheStatusLineAfterTheSeveralAppsLine(t *testing.T) {
 		t.Errorf("stdout = %q, want %q", h.out, want)
 	}
 }
+
+const (
+	p8Text      = "-----BEGIN PRIVATE KEY-----\nMADEUPKEYTEXT\n-----END PRIVATE KEY-----"
+	serviceJSON = `{"type":"service_account","client_email":"Cadre-Reader@colette.iam.gserviceaccount.com","private_key":"made-up"}`
+)
+
+// keyFile writes content to a temp file and returns its path.
+func keyFile(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// typePath makes the harness a terminal whose person types path when asked for it.
+func (h *harness) typePath(path string, asked *int) {
+	h.deps.Stdin = strings.NewReader("never read")
+	h.deps.Terminal = func() bool { return true }
+	h.deps.ReadPath = func() (string, error) {
+		if asked != nil {
+			*asked++
+		}
+		return path, nil
+	}
+	h.deps.ReadSecret = func() (string, error) { panic("a path is not read as a secret") }
+}
+
+const storeAdded = `{"platform":"app_store","name":"2X9R4HXF34","apps":3}`
+
+func TestAppStoreKeyAddFromAPipe(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 200, storeAdded, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	h.pipe("  " + p8Text + "\n")
+
+	if code := cli.Run([]string{"app-store", "key", "add", "2x9r4hxf34", "--issuer", "69a6de70-aaaa"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Connected the App Store Connect key 2X9R4HXF34: it reads 3 apps.\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+	if h.errb.String() != "" {
+		t.Errorf("stderr = %q", h.errb)
+	}
+	var body struct{ Token string }
+	_ = json.Unmarshal([]byte(got.raw), &body)
+	var token map[string]string
+	if err := json.Unmarshal([]byte(body.Token), &token); err != nil {
+		t.Fatalf("token = %q", body.Token)
+	}
+	if got.method != "PUT" || got.path != "/api/platforms/app_store/accounts/2X9R4HXF34" || got.auth != "Bearer cadre_abc" ||
+		token["issuer_id"] != "69a6de70-aaaa" || token["private_key"] != p8Text || len(token) != 2 {
+		t.Errorf("request = %+v, token %v", got, token)
+	}
+}
+
+func TestAppStoreKeyAddOneApp(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 200, `{"platform":"app_store","name":"2X9R4HXF34","apps":1}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	h.pipe(p8Text)
+
+	if code := cli.Run([]string{"app-store", "key", "add", "2X9R4HXF34", "--issuer", "i"}, h.deps); code != 0 || h.out.String() != "Connected the App Store Connect key 2X9R4HXF34: it reads 1 app.\n" {
+		t.Errorf("code = %d, stdout = %q, stderr %q", code, h.out, h.errb)
+	}
+}
+
+func TestAppStoreKeyAddAsksForThePath(t *testing.T) {
+	var got flyRequest
+	asked := 0
+	srv := flyServer(t, 200, storeAdded, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	h.typePath(keyFile(t, p8Text+"\n"), &asked)
+
+	if code := cli.Run([]string{"app-store", "key", "add", "2X9R4HXF34", "--issuer", "iss"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if h.errb.String() != "Path to AuthKey_2X9R4HXF34.p8: " || asked != 1 {
+		t.Errorf("stderr = %q, asked %d", h.errb, asked)
+	}
+	if !strings.Contains(got.raw, `MADEUPKEYTEXT`) || strings.Contains(got.raw, "never read") {
+		t.Errorf("request = %+v", got)
+	}
+	if strings.Contains(h.out.String()+h.errb.String(), "MADEUPKEYTEXT") {
+		t.Errorf("the key was printed: %q %q", h.out, h.errb)
+	}
+}
+
+func TestAppStoreKeyAddExpandsAHomePath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "AuthKey.p8"), []byte(p8Text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var got flyRequest
+	srv := flyServer(t, 200, storeAdded, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	h.typePath("~/AuthKey.p8", nil)
+
+	if code := cli.Run([]string{"app-store", "key", "add", "2X9R4HXF34", "--issuer", "iss"}, h.deps); code != 0 || !strings.Contains(got.raw, "MADEUPKEYTEXT") {
+		t.Errorf("code = %d, stderr %q, request %+v", code, h.errb, got)
+	}
+}
+
+func TestAppStoreKeyAddUnreadableFile(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 200, storeAdded, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	h.typePath(filepath.Join(t.TempDir(), "missing.p8"), nil)
+
+	if code := cli.Run([]string{"app-store", "key", "add", "2X9R4HXF34", "--issuer", "iss"}, h.deps); code != 1 {
+		t.Errorf("code = %d", code)
+	}
+	if !strings.Contains(h.errb.String(), "Could not read the key file: ") || got.calls != 0 {
+		t.Errorf("stderr = %q, calls %d", h.errb, got.calls)
+	}
+}
+
+func TestAppStoreKeyAddWithoutAKeySendsNothing(t *testing.T) {
+	for name, setup := range map[string]func(h *harness){
+		"empty pipe": func(h *harness) { h.pipe(" \n") },
+		"empty file": func(h *harness) { h.typePath(keyFile(t, "\n"), nil) },
+	} {
+		var got flyRequest
+		srv := flyServer(t, 200, storeAdded, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		setup(h)
+		if code := cli.Run([]string{"app-store", "key", "add", "2X9R4HXF34", "--issuer", "iss"}, h.deps); code != 1 || got.calls != 0 {
+			t.Errorf("%s: code = %d, calls %d", name, code, got.calls)
+		}
+		if !strings.HasSuffix(h.errb.String(), "No key given. Pipe it in, or give the path of its file when asked.\n") {
+			t.Errorf("%s: stderr = %q", name, h.errb)
+		}
+	}
+}
+
+func TestAppStoreKeyAddNeedsAnIssuer(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 200, storeAdded, &got)
+	for _, args := range [][]string{
+		{"app-store", "key", "add", "2X9R4HXF34"},
+		{"app-store", "key", "add", "--issuer", "iss"},
+		{"app-store", "key", "add", "2X9R4HXF34", "--issuer"},
+		{"app-store", "key", "add", "2X9R4HXF34", "--issuer", "iss", "extra"},
+	} {
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		h.pipe(p8Text)
+		want := "Usage: cadre app-store key add <key-id> --issuer <issuer-id>\nRun cadre help app-store key add for details.\n"
+		if code := cli.Run(args, h.deps); code != 2 || h.errb.String() != want || got.calls != 0 {
+			t.Errorf("%q: code = %d, stderr %q", args, code, h.errb)
+		}
+	}
+}
+
+func TestAppStoreKeyAddRefused(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 422, `{"error":"token_refused"}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	h.pipe(p8Text)
+
+	if code := cli.Run([]string{"app-store", "key", "add", "2x9r4hxf34", "--issuer", "iss"}, h.deps); code != 1 {
+		t.Errorf("code = %d", code)
+	}
+	if want := "Apple refused the key 2X9R4HXF34. Check its key ID, its issuer ID and its .p8 file.\n"; h.errb.String() != want || h.out.Len() != 0 {
+		t.Errorf("stderr = %q, stdout %q", h.errb, h.out)
+	}
+}
+
+func TestAppStoreKeyAddJSON(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 200, storeAdded, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	h.pipe(p8Text)
+
+	if code := cli.Run([]string{"app-store", "key", "add", "2X9R4HXF34", "--issuer", "iss", "--json"}, h.deps); code != 0 || h.out.String() != storeAdded {
+		t.Errorf("code = %d, stdout = %q, stderr %q", code, h.out, h.errb)
+	}
+}
+
+func TestAppStoreKeyRemove(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 200, `{"platform":"app_store","name":"2X9R4HXF34"}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"app-store", "key", "remove", "2x9r4hxf34"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Removed the App Store Connect key 2X9R4HXF34.\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+	if got.method != "DELETE" || got.path != "/api/platforms/app_store/accounts/2X9R4HXF34" {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestAppStoreKeyRemoveInUse(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 409, `{"error":"account_in_use","repos":["club-mobile","admin-mobile"]}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"app-store", "key", "remove", "2X9R4HXF34"}, h.deps); code != 1 {
+		t.Errorf("code = %d", code)
+	}
+	if want := "2X9R4HXF34 still reads club-mobile, admin-mobile. Unset or move those targets first.\n"; h.errb.String() != want {
+		t.Errorf("stderr = %q", h.errb)
+	}
+}
+
+func TestAppStoreKeyRemoveNotFound(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 404, `{"error":"account_not_found"}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"app-store", "key", "remove", "2X9R4HXF34"}, h.deps); code != 1 {
+		t.Errorf("code = %d", code)
+	}
+	if want := "No App Store Connect key 2X9R4HXF34 on " + srv.URL + ".\n"; h.errb.String() != want {
+		t.Errorf("stderr = %q", h.errb)
+	}
+}
+
+const (
+	playEmail = "cadre-reader@colette.iam.gserviceaccount.com"
+	playAdded = `{"platform":"google_play","name":"cadre-reader@colette.iam.gserviceaccount.com","apps":0}`
+)
+
+func TestGooglePlayAccountAdd(t *testing.T) {
+	var got flyRequest
+	asked := 0
+	srv := flyServer(t, 200, playAdded, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	h.typePath(keyFile(t, serviceJSON), &asked)
+
+	if code := cli.Run([]string{"google-play", "account", "add"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Connected the Google Play account " + playEmail + ": Google accepts its key.\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+	if h.errb.String() != "Path to the service account's JSON key: " || asked != 1 {
+		t.Errorf("stderr = %q, asked %d", h.errb, asked)
+	}
+	var body struct{ Token string }
+	_ = json.Unmarshal([]byte(got.raw), &body)
+	if got.method != "PUT" || got.path != "/api/platforms/google_play/accounts/"+playEmail || body.Token != serviceJSON {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestGooglePlayAccountAddFromAPipe(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 200, playAdded, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	h.pipe(serviceJSON + "\n")
+
+	if code := cli.Run([]string{"google-play", "account", "add"}, h.deps); code != 0 || h.errb.Len() != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if !strings.HasSuffix(got.path, "/accounts/"+playEmail) {
+		t.Errorf("path = %q", got.path)
+	}
+}
+
+func TestGooglePlayAccountAddNotAKeyFile(t *testing.T) {
+	for name, content := range map[string]string{
+		"not json":    p8Text,
+		"no email":    `{"type":"service_account"}`,
+		"empty email": `{"client_email":"  "}`,
+		"an array":    `[1]`,
+	} {
+		var got flyRequest
+		srv := flyServer(t, 200, playAdded, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		h.pipe(content)
+
+		if code := cli.Run([]string{"google-play", "account", "add"}, h.deps); code != 1 {
+			t.Errorf("%s: code = %d", name, code)
+		}
+		if h.errb.String() != "That file isn't a service account's JSON key.\n" || got.calls != 0 {
+			t.Errorf("%s: stderr = %q, calls %d", name, h.errb, got.calls)
+		}
+	}
+}
+
+func TestGooglePlayAccountAddRefused(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 422, `{"error":"token_refused"}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	h.pipe(serviceJSON)
+
+	if code := cli.Run([]string{"google-play", "account", "add"}, h.deps); code != 1 {
+		t.Errorf("code = %d", code)
+	}
+	if want := "Google refused this service account's key.\n"; h.errb.String() != want || strings.Contains(h.errb.String(), "made-up") {
+		t.Errorf("stderr = %q", h.errb)
+	}
+}
+
+func TestGooglePlayAccountAddJSONAndUsage(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 200, playAdded, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	h.pipe(serviceJSON)
+	if code := cli.Run([]string{"google-play", "account", "add", "--json"}, h.deps); code != 0 || h.out.String() != playAdded {
+		t.Errorf("code = %d, stdout = %q, stderr %q", code, h.out, h.errb)
+	}
+
+	h = newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	want := "Usage: cadre google-play account add\nRun cadre help google-play account add for details.\n"
+	if code := cli.Run([]string{"google-play", "account", "add", playEmail}, h.deps); code != 2 || h.errb.String() != want {
+		t.Errorf("code = %d, stderr %q", code, h.errb)
+	}
+}
+
+func TestGooglePlayAccountRemove(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 200, `{"platform":"google_play","name":"`+playEmail+`"}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"google-play", "account", "remove", playEmail}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Removed the Google Play account " + playEmail + ".\n"; h.out.String() != want {
+		t.Errorf("stdout = %q", h.out)
+	}
+	if got.method != "DELETE" || got.path != "/api/platforms/google_play/accounts/"+playEmail {
+		t.Errorf("request = %+v", got)
+	}
+}
+
+func TestGooglePlayAccountRemoveInUse(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 409, `{"error":"account_in_use","repos":["club-mobile"]}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"google-play", "account", "remove", playEmail}, h.deps); code != 1 {
+		t.Errorf("code = %d", code)
+	}
+	if want := playEmail + " still reads club-mobile. Unset or move those targets first.\n"; h.errb.String() != want {
+		t.Errorf("stderr = %q", h.errb)
+	}
+}

@@ -43,17 +43,22 @@ var (
 		"login", "whoami",
 		"project create", "project pull", "project update", "project archive", "project unarchive",
 		"spec pull", "spec push", "pr link", "repo set", "repo unset", "repo show",
-		"fly org add", "fly org remove", "vercel team add", "vercel team remove", "deploy", "upgrade", "version", "help",
+		"fly org add", "fly org remove", "vercel team add", "vercel team remove",
+		"app-store key add", "app-store key remove", "google-play account add", "google-play account remove", "deploy", "upgrade", "version", "help",
 	}
 	everyGroup = map[string][]string{
-		"project":     {"create", "pull", "update", "archive", "unarchive"},
-		"spec":        {"pull", "push"},
-		"pr":          {"link"},
-		"repo":        {"set", "unset", "show"},
-		"fly":         {"org add", "org remove"},
-		"fly org":     {"add", "remove"},
-		"vercel":      {"team add", "team remove"},
-		"vercel team": {"add", "remove"},
+		"project":             {"create", "pull", "update", "archive", "unarchive"},
+		"spec":                {"pull", "push"},
+		"pr":                  {"link"},
+		"repo":                {"set", "unset", "show"},
+		"fly":                 {"org add", "org remove"},
+		"fly org":             {"add", "remove"},
+		"vercel":              {"team add", "team remove"},
+		"vercel team":         {"add", "remove"},
+		"app-store":           {"key add", "key remove"},
+		"app-store key":       {"add", "remove"},
+		"google-play":         {"account add", "account remove"},
+		"google-play account": {"add", "remove"},
 	}
 )
 

@@ -21,6 +21,7 @@ type Env struct {
 	Stdin          io.Reader              // where a piped token comes from; the process's stdin when nil
 	Terminal       func() bool            // whether stdin is a terminal; the process's stdin mode when nil
 	ReadSecret     func() (string, error) // one line typed on the terminal with echo off; the terminal device when nil
+	ReadPath       func() (string, error) // one line typed on the terminal, echoed, a file's path; the terminal device when nil
 }
 
 // Run executes the command in args and returns the exit code: 0 ok, 1 failure, 2 usage error.
@@ -51,6 +52,10 @@ func Run(args []string, env Env) int {
 		return runFly(env, asJSON, args[1:])
 	case "vercel":
 		return runVercel(env, asJSON, args[1:])
+	case "app-store":
+		return runAppStore(env, asJSON, args[1:])
+	case "google-play":
+		return runGooglePlay(env, asJSON, args[1:])
 	case "deploy":
 		return runDeploy(env, asJSON, args[1:])
 	case "upgrade":

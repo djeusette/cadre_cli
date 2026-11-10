@@ -426,8 +426,13 @@ func addAccountHint(platform string) string {
 
 // displayName is a platform's name with its first letter upper-cased: fly is Fly.
 func displayName(platform string) string {
-	if platform == "" {
+	switch platform {
+	case "":
 		return ""
+	case "app_store":
+		return "App Store"
+	case "google_play":
+		return "Google Play"
 	}
 	return strings.ToUpper(platform[:1]) + platform[1:]
 }

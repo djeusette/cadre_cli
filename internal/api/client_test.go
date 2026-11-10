@@ -1106,3 +1106,22 @@ func TestSetTargetWaitsLongerThanOtherCalls(t *testing.T) {
 		t.Error("UnsetTarget was not cut off at the default timeout")
 	}
 }
+
+// A Google Play account is named by an email, which must stay one path segment.
+func TestAccountNameIsOnePathSegment(t *testing.T) {
+	var paths []string
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.EscapedPath())
+		w.WriteHeader(200)
+		io.WriteString(w, `{"platform":"google_play","name":"x","apps":0}`)
+	})
+	for _, name := range []string{"cadre-reader+a@colette.iam.gserviceaccount.com", "a/b@c.d"} {
+		if _, err := c.AddAccount(context.Background(), "google_play", name, "tok"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{"/api/platforms/google_play/accounts/cadre-reader+a@colette.iam.gserviceaccount.com", "/api/platforms/google_play/accounts/a%2Fb@c.d"}
+	if !slices.Equal(paths, want) {
+		t.Errorf("paths = %q, want %q", paths, want)
+	}
+}
