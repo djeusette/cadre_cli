@@ -11,8 +11,9 @@ import (
 	"github.com/djeusette/cadre_cli/internal/api"
 )
 
-// runRepo dispatches `repo set <repo> (--fly-app <app> [--name <app>] [--fly-config <file>] [--status-url <url>]
-// |--vercel-project <id> --name <app> --vercel-dir <folder>|--platform <name>)`,
+// runRepo dispatches `repo set <repo> (--fly-app <app> [--name <app>] [--fly-config <file>]
+// [--status-url <url>|--no-status-url]|--vercel-project <id> --name <app> --vercel-dir <folder>
+// [--status-url <url>|--no-status-url]|--platform <name>)`,
 // `repo unset <repo> (--name <app>|--platform <name> [--name <app>])` and `repo show <repo>`.
 func runRepo(env Env, asJSON bool, args []string) int {
 	if len(args) == 0 {
@@ -50,10 +51,12 @@ func runRepo(env Env, asJSON bool, args []string) int {
 type repoSetFlags struct {
 	flyApp, flyConfig, statusURL, platform string
 	vercelProject, name, vercelDir         string
+	noStatusURL                            bool
 }
 
 // takeRepoSetFlags reads repo set's flags out of args, leaving the rest, and reports whether they make one of the
-// three forms: each flag belongs to one form only.
+// three forms: each flag belongs to one form only, except that --status-url and --no-status-url (one of them at most)
+// belong to either app form.
 func takeRepoSetFlags(args []string) (repoSetFlags, []string, bool) {
 	var f repoSetFlags
 	for _, flag := range []struct {
@@ -68,17 +71,21 @@ func takeRepoSetFlags(args []string) (repoSetFlags, []string, bool) {
 			return f, nil, false
 		}
 	}
+	args, f.noStatusURL = splitBoolFlag(args, "--no-status-url")
 	forms := 0
 	for _, v := range []string{f.flyApp, f.vercelProject, f.platform} {
 		if v != "" {
 			forms++
 		}
 	}
+	setsStatusURL := f.statusURL != "" || f.noStatusURL
 	valid := forms == 1 &&
-		(f.flyApp != "" || (f.flyConfig == "" && f.statusURL == "")) &&
+		(f.flyApp != "" || f.flyConfig == "") &&
+		(f.vercelProject != "" || f.flyApp != "" || !setsStatusURL) &&
+		(f.statusURL == "" || !f.noStatusURL) &&
 		(f.vercelProject != "" || f.vercelDir == "") &&
 		(f.vercelProject != "" || f.flyApp != "" || f.name == "") &&
-		(f.vercelProject == "" || (f.name != "" && f.vercelDir != "" && f.statusURL == "" && f.flyConfig == ""))
+		(f.vercelProject == "" || (f.name != "" && f.vercelDir != "" && f.flyConfig == ""))
 	return f, args, valid
 }
 
@@ -106,11 +113,11 @@ func runRepoSet(env Env, asJSON bool, args []string) int {
 			fmt.Fprintf(s.env.Stderr, "Vercel has its own flags: cadre repo set %s --vercel-project <id> --name <app> --vercel-dir <folder>.\n", a[0])
 			return 1
 		}
-		return setTarget(ctx, s, a[0], platform, f.name, settings, f.statusURL)
+		return setTarget(ctx, s, a[0], platform, f.name, settings, api.StatusURL{URL: f.statusURL, None: f.noStatusURL})
 	})
 }
 
-func setTarget(ctx context.Context, s *session, repo, platform, name string, settings map[string]string, statusURL string) int {
+func setTarget(ctx context.Context, s *session, repo, platform, name string, settings map[string]string, statusURL api.StatusURL) int {
 	if !s.requireKey() {
 		return 1
 	}
@@ -128,10 +135,26 @@ func setTarget(ctx context.Context, s *session, repo, platform, name string, set
 		if platform == "fly" && name == "" {
 			s.sayFurtherApp(ctx, repo)
 		}
+		if line := statusKeptLine(target); line != "" {
+			fmt.Fprintln(s.env.Stdout, line)
+		}
 	default:
 		fmt.Fprintf(s.env.Stdout, "cadre can't read %s deploys yet, so %s shows as not tracked.\n", displayName(target.Platform), target.Repo)
 	}
 	return 0
+}
+
+// statusKeptLine is what set says about the status URL the server kept, or why it kept none; empty when there is
+// nothing to say.
+func statusKeptLine(t api.Target) string {
+	switch {
+	case t.StatusURL != "":
+		return "Status URL: " + oneLine(t.StatusURL)
+	case t.StatusURLNote != "":
+		return "No status URL: " + oneLine(t.StatusURLNote) + "."
+	default:
+		return ""
+	}
 }
 
 // sayFurtherApp says that the repo now has several apps, and how to move one instead of adding another. Two Fly apps

@@ -122,7 +122,7 @@ const (
 // rigApp is one Vercel target the rig's server answers with. An empty team goes out as null, and last is the
 // last_deploy value as JSON.
 type rigApp struct {
-	name, project, dir, team, last string
+	name, project, dir, team, last, statusURL string
 }
 
 func (a rigApp) json() string {
@@ -130,8 +130,12 @@ func (a rigApp) json() string {
 	if a.team != "" {
 		team = jsonString(a.team)
 	}
-	return fmt.Sprintf(`{"platform":"vercel","name":%s,"settings":{"project":%s,"dir":%s},"tracked":true,"account":%s,"last_deploy":%s}`,
-		jsonString(a.name), jsonString(a.project), jsonString(a.dir), team, a.last)
+	statusURL := "null"
+	if a.statusURL != "" {
+		statusURL = jsonString(a.statusURL)
+	}
+	return fmt.Sprintf(`{"platform":"vercel","name":%s,"settings":{"project":%s,"dir":%s},"tracked":true,"account":%s,"last_deploy":%s,"status_url":%s}`,
+		jsonString(a.name), jsonString(a.project), jsonString(a.dir), team, a.last, statusURL)
 }
 
 func jsonString(s string) string {
@@ -472,6 +476,22 @@ func TestVercelDeployRefusesAnAppWithNoTeam(t *testing.T) {
 	r.app("admin").team = ""
 
 	r.assertVercelRefused(r.deploy("--all"), "admin has no Vercel team in cadre. Connect it again with cadre repo set colette-api --vercel-project prj_admin --name admin --vercel-dir apps/admin\n")
+}
+
+// The refusal's command replaces the target, so it keeps the app's status URL, quoted when it can be.
+func TestVercelDeployNoTeamRefusalKeepsTheStatusURL(t *testing.T) {
+	for name, tc := range map[string]struct{ url, want string }{
+		"quotable":   {"https://mosh.colette.club/login", " --status-url 'https://mosh.colette.club/login'\n"},
+		"unquotable": {"https://mosh.colette.club/it's", " --status-url <url> (see cadre repo show)\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newVercelRig(t)
+			r.app("admin").team = ""
+			r.app("admin").statusURL = tc.url
+
+			r.assertVercelRefused(r.deploy("--all"), "admin has no Vercel team in cadre. Connect it again with cadre repo set colette-api --vercel-project prj_admin --name admin --vercel-dir apps/admin"+tc.want)
+		})
+	}
 }
 
 // Each app is checked in full, in name order, whatever order the server lists them in.

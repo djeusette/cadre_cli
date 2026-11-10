@@ -216,8 +216,16 @@ type Linked struct {
 
 const (
 	maxResponseBytes = 1 << 20
-	defaultTimeout   = 15 * time.Second
 	maxRetryAfter    = 24 * time.Hour
+)
+
+// Timeouts of the client's own http.Client. They are variables so tests can shorten them.
+var (
+	defaultTimeout = 15 * time.Second
+	// setTargetTimeout is longer because cadre may be waking from zero, and a Vercel app set with no status URL has
+	// the server read the project's domains and call one, which it gives up on after 10 seconds. Timing out sooner
+	// would report a failure for a set cadre may have saved.
+	setTargetTimeout = 30 * time.Second
 )
 
 // Client talks to one Cadre server. APIKey may be empty for the login calls.
@@ -502,10 +510,13 @@ type Target struct {
 	LastDeploy *LastDeploy `json:"last_deploy"`
 	// StatusURL is the URL cadre checks to tell whether the app is live, or empty. Live is "live", "not_live",
 	// "not_checked" or empty when the target has no live state. NotLiveSince is set while Live is "not_live".
-	StatusURL    string     `json:"status_url"`
-	Live         string     `json:"live"`
-	NotLiveSince *time.Time `json:"not_live_since"`
-	Raw          []byte     `json:"-"`
+	StatusURL string `json:"status_url"`
+	// StatusURLNote says why a default that was asked for kept no status URL, as the answer to a PUT does; it is empty
+	// otherwise.
+	StatusURLNote string     `json:"status_url_note"`
+	Live          string     `json:"live"`
+	NotLiveSince  *time.Time `json:"not_live_since"`
+	Raw           []byte     `json:"-"`
 }
 
 // LastDeploy is a target's latest deploy. Commit is nil when cadre could not tie the deploy to a commit.
@@ -595,12 +606,19 @@ func (c *Client) NextDeploy(ctx context.Context, repo, app string) (NextDeploy, 
 	return next, nil
 }
 
-// SetTarget sets the repo's target on platform, replacing its settings. A non-empty statusURL is sent as the
-// top-level status_url, and a non-empty name as the top-level name; an empty one leaves its key out. The server
-// reads the platform first. It
-// returns ErrRepositoryNotFound, ErrPlatformNotConnected, ErrPlatformUnreachable, ErrUnauthorized or a
-// *ValidationError when the server refuses it.
-func (c *Client) SetTarget(ctx context.Context, repo, platform, name string, settings map[string]string, statusURL string) (Target, error) {
+// StatusURL is what a set says about a target's status URL: a non-empty URL sets it, None sets none, and the zero
+// value leaves the choice to the server, which takes the platform's default.
+type StatusURL struct {
+	URL  string
+	None bool
+}
+
+// SetTarget sets the repo's target on platform, replacing its settings. statusURL goes out as the top-level
+// status_url: the URL as a string, none as null, and the platform's default as no key at all. A non-empty name is
+// sent as the top-level name; an empty one leaves its key out. The server reads the platform first. It returns
+// ErrRepositoryNotFound, ErrPlatformNotConnected, ErrPlatformUnreachable, ErrUnauthorized or a *ValidationError when
+// the server refuses it.
+func (c *Client) SetTarget(ctx context.Context, repo, platform, name string, settings map[string]string, statusURL StatusURL) (Target, error) {
 	var target Target
 	if settings == nil {
 		settings = map[string]string{}
@@ -609,14 +627,17 @@ func (c *Client) SetTarget(ctx context.Context, repo, platform, name string, set
 	if name != "" {
 		body["name"] = name
 	}
-	if statusURL != "" {
-		body["status_url"] = statusURL
+	switch {
+	case statusURL.URL != "":
+		body["status_url"] = statusURL.URL
+	case statusURL.None:
+		body["status_url"] = nil
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return target, err
 	}
-	status, resp, err := c.do(ctx, http.MethodPut, targetPath(repo, platform), payload)
+	status, resp, err := c.send(ctx, setTargetTimeout, http.MethodPut, targetPath(repo, platform), payload)
 	if err != nil {
 		return target, err
 	}
@@ -834,6 +855,11 @@ func validationError(status int, body []byte) error {
 // do sends one request and returns the status and body. The key goes only in the Authorization header.
 // A 429 also returns a *RateLimitedError, whatever the call.
 func (c *Client) do(ctx context.Context, method, path string, payload []byte) (int, []byte, error) {
+	return c.send(ctx, defaultTimeout, method, path, payload)
+}
+
+// send is do with the timeout an http.Client of ours waits for the answer; a Client whose HTTP is set keeps its own.
+func (c *Client) send(ctx context.Context, timeout time.Duration, method, path string, payload []byte) (int, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.BaseURL, "/")+path, bytes.NewReader(payload))
 	if err != nil {
 		return 0, nil, err
@@ -845,7 +871,7 @@ func (c *Client) do(ctx context.Context, method, path string, payload []byte) (i
 		req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	}
 
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.httpClient(timeout).Do(req)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -879,9 +905,9 @@ func (c *Client) unexpected(status int, err error) error {
 	return fmt.Errorf("unexpected response from %s (status %d): %w", c.BaseURL, status, err)
 }
 
-func (c *Client) httpClient() *http.Client {
+func (c *Client) httpClient(timeout time.Duration) *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
-	return &http.Client{Timeout: defaultTimeout}
+	return &http.Client{Timeout: timeout}
 }

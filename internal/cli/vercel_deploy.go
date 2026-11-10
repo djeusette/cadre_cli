@@ -33,6 +33,7 @@ var fullSHA = regexp.MustCompile(`\A[0-9a-fA-F]{40}\z`)
 type vercelApp struct {
 	name, project, dir, team string
 	live                     string // the commit of its last deploy, or empty when there is none to compare
+	statusURL                string // the target's, or empty
 }
 
 // vercelDeployment is what the Vercel checks learn, in order, and all that the builds need. Its deployment holds the
@@ -114,7 +115,7 @@ func findVercelApps(_ context.Context, v *vercelDeployment) error {
 }
 
 func vercelAppOf(t api.Target) vercelApp {
-	app := vercelApp{name: t.Name}
+	app := vercelApp{name: t.Name, statusURL: t.StatusURL}
 	app.project, _ = t.Settings["project"].(string)
 	app.dir, _ = t.Settings["dir"].(string)
 	if t.Account != nil {
@@ -126,14 +127,27 @@ func vercelAppOf(t api.Target) vercelApp {
 	return app
 }
 
+// statusURLFlag is what the person passes to repo set, which replaces the target, so it keeps the app's status URL.
+// They paste it at the end of the command, so a URL that can't be quoted safely is left for them to fill in.
+func (a vercelApp) statusURLFlag() string {
+	switch {
+	case a.statusURL == "":
+		return ""
+	case quotable(a.statusURL):
+		return " --status-url '" + a.statusURL + "'"
+	default:
+		return " --status-url <url> (see cadre repo show)"
+	}
+}
+
 // checkApp refuses an app with no team to build in, a folder that isn't in the checkout, or a folder with no
 // .vercelignore: vercel uploads the folder it runs in and doesn't read .gitignore, so that file alone keeps credentials
 // and local files off Vercel. The no-team refusal ends with its command, so it pastes without a full stop.
 func (v *vercelDeployment) checkApp(app vercelApp) error {
 	name, dir := oneLine(app.name), oneLine(app.dir)
 	if app.team == "" {
-		return fmt.Errorf("%s has no Vercel team in cadre. Connect it again with cadre repo set %s --vercel-project %s --name %s --vercel-dir %s",
-			name, oneLine(v.repository.Name), oneLine(app.project), name, dir)
+		return fmt.Errorf("%s has no Vercel team in cadre. Connect it again with cadre repo set %s --vercel-project %s --name %s --vercel-dir %s%s",
+			name, oneLine(v.repository.Name), oneLine(app.project), name, dir, app.statusURLFlag())
 	}
 	folder, err := v.isFolder(app.dir)
 	if err != nil {
