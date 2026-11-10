@@ -54,7 +54,7 @@ var vercelChecks = []func(context.Context, *vercelDeployment) error{
 
 // vercelDeploy builds every app d holds, all on Vercel, then promotes them all, once every check has passed and the one
 // question is settled. Anything else ends here.
-func vercelDeploy(ctx context.Context, s *session, d deployment, yes bool) int {
+func vercelDeploy(ctx context.Context, s *session, d deployment, flags deployFlags) int {
 	v := &vercelDeployment{deployment: d}
 	for _, check := range vercelChecks {
 		if err := check(ctx, v); err != nil {
@@ -62,15 +62,15 @@ func vercelDeploy(ctx context.Context, s *session, d deployment, yes bool) int {
 		}
 	}
 
-	next, err := s.client.NextDeploy(ctx, v.repository.Name)
+	next, err := s.client.NextDeploy(ctx, v.repository.Name, flags.app)
 	if err != nil {
-		return s.repoFailure(err, v.repository.Name, "")
+		return s.nextDeployFailure(err, v.repository.Name, flags.app)
 	}
 	lacking, err := v.lacking(ctx)
 	if err != nil {
 		return fail(s.env, err)
 	}
-	if !s.settleOpenItems(next.BeforeDeploying, lacking, yes) {
+	if !s.settleOpenItems(next, lacking, flags.yes) {
 		fmt.Fprintln(s.env.Stderr, msgNotDeployed)
 		return 1
 	}

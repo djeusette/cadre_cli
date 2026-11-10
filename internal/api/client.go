@@ -543,17 +543,40 @@ type BeforeDeployingItem struct {
 	Text   string `json:"text"`
 }
 
-// NextDeploy is what deploying a repo now needs first.
-type NextDeploy struct {
-	Repo            string                `json:"repo"`
-	BeforeDeploying []BeforeDeployingItem `json:"before_deploying"`
+// BlockedPullRequest is a pull request a deploy would ship that the release queue shows Blocked: WaitsFor should go
+// first.
+type BlockedPullRequest struct {
+	Number   int        `json:"number"`
+	URL      string     `json:"url"`
+	WaitsFor WaitedStep `json:"waits_for"`
 }
 
-// NextDeploy returns ErrRepositoryNotFound or ErrUnauthorized when the server refuses it. An answer with no
-// before_deploying list is an error: only an empty list means that nothing is open.
-func (c *Client) NextDeploy(ctx context.Context, repo string) (NextDeploy, error) {
+// WaitedStep is the earlier step a Blocked pull request waits for: the app or repo it names, and its pull request, or
+// nil when that step has none yet.
+type WaitedStep struct {
+	Name   string `json:"name"`
+	Number *int   `json:"number"`
+}
+
+// NextDeploy is what deploying a repo, or one app of it, now needs first. Apps are the apps that deploy covers, in
+// the release queue's order.
+type NextDeploy struct {
+	Repo            string                `json:"repo"`
+	Apps            []string              `json:"apps"`
+	BeforeDeploying []BeforeDeployingItem `json:"before_deploying"`
+	Blocked         []BlockedPullRequest  `json:"blocked"`
+}
+
+// NextDeploy asks about the app of that name, or the whole repo when app is empty. It returns ErrRepositoryNotFound,
+// ErrTargetNotFound or ErrUnauthorized when the server refuses it. An answer with no before_deploying or blocked list
+// is an error: only an empty list means that nothing is open, or nothing Blocked.
+func (c *Client) NextDeploy(ctx context.Context, repo, app string) (NextDeploy, error) {
 	var next NextDeploy
-	status, resp, err := c.do(ctx, http.MethodGet, repositoryPath(repo, "/next-deploy"), nil)
+	path := repositoryPath(repo, "/next-deploy")
+	if app != "" {
+		path += "?app=" + url.QueryEscape(app)
+	}
+	status, resp, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return next, err
 	}
@@ -563,8 +586,11 @@ func (c *Client) NextDeploy(ctx context.Context, repo string) (NextDeploy, error
 	if err := c.decode(status, resp, &next); err != nil {
 		return next, err
 	}
-	if next.BeforeDeploying == nil {
+	switch {
+	case next.BeforeDeploying == nil:
 		return next, c.unexpected(status, errors.New("no before_deploying list"))
+	case next.Blocked == nil:
+		return next, c.unexpected(status, errors.New("no blocked list"))
 	}
 	return next, nil
 }

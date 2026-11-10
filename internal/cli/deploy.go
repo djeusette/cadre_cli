@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,7 +37,7 @@ type deployment struct {
 	targets    []api.Target // the apps it deploys, all on one platform, in name order
 	checkout   git.Checkout
 	commit     string   // the full commit it deploys: for Fly, the one main and origin/main agree on
-	flyApps    []flyApp // the targets, as the Fly checks find them
+	flyApps    []flyApp // the targets, as the Fly checks find them, in the order they deploy
 	fly        string   // the path to flyctl or fly
 }
 
@@ -96,9 +97,9 @@ func deploy(ctx context.Context, s *session, repo string, flags deployFlags) int
 	}
 	d := deployment{repository: shown, targets: targets}
 	if len(targets) > 0 && targets[0].Platform == "vercel" {
-		return vercelDeploy(ctx, s, d, flags.yes)
+		return vercelDeploy(ctx, s, d, flags)
 	}
-	return deployFlyApps(ctx, s, &d, flags.yes)
+	return deployFlyApps(ctx, s, &d, flags)
 }
 
 // pickTargets is the apps the deploy takes, from those cadre deploy can deploy. With none it takes none, so the Fly
@@ -179,24 +180,37 @@ func joinNames(names []string) string {
 	return strings.Join(shown, ", ")
 }
 
-// deployFlyApps runs fly for each app in turn, once every check has passed for all of them and the open items are
-// settled.
-func deployFlyApps(ctx context.Context, s *session, d *deployment, yes bool) int {
+// deployFlyApps runs fly for each app in turn, in the order Cadre's release queue lists them, once every check has
+// passed for all of them and the open items and Blocked pull requests are settled.
+func deployFlyApps(ctx context.Context, s *session, d *deployment, flags deployFlags) int {
 	for _, check := range deployChecks {
 		if err := check(ctx, d); err != nil {
 			return fail(s.env, err)
 		}
 	}
 
-	next, err := s.client.NextDeploy(ctx, d.repository.Name)
+	next, err := s.client.NextDeploy(ctx, d.repository.Name, flags.app)
 	if err != nil {
-		return s.repoFailure(err, d.repository.Name, "")
+		return s.nextDeployFailure(err, d.repository.Name, flags.app)
 	}
-	if !s.settleOpenItems(next.BeforeDeploying, nil, yes) {
+	inQueueOrder(d.flyApps, next.Apps)
+	if !s.settleOpenItems(next, nil, flags.yes) {
 		fmt.Fprintln(s.env.Stderr, msgNotDeployed)
 		return 1
 	}
 	return s.runFlyApps(ctx, d)
+}
+
+// inQueueOrder sorts apps in the order queue names them. An app queue doesn't name goes last, keeping its place among
+// the others, which the checks found by name.
+func inQueueOrder(apps []flyApp, queue []string) {
+	place := func(app flyApp) int {
+		if i := slices.Index(queue, app.name); i >= 0 {
+			return i
+		}
+		return len(queue)
+	}
+	slices.SortStableFunc(apps, func(a, b flyApp) int { return cmp.Compare(place(a), place(b)) })
 }
 
 // runFlyApps deploys each app in turn, and repeats the local checks before each. cadre stays up through SIGINT and
@@ -455,18 +469,22 @@ func findFly(ctx context.Context, d *deployment) error {
 	return nil
 }
 
-// settleOpenItems lists what the deploy needs first, then each line on what the commit lacks, and reports whether to go
-// on: yes, or the person's answer to the one question they share. With nothing to list there is nothing to settle.
-func (s *session) settleOpenItems(items []api.BeforeDeployingItem, lacking []string, yes bool) bool {
-	if len(items) == 0 && len(lacking) == 0 {
+// settleOpenItems lists what the deploy needs first, then each pull request it would ship that the release queue shows
+// Blocked, then each line on what the commit lacks, and reports whether to go on: yes, or the person's answer to the one
+// question they share. With nothing to list there is nothing to settle.
+func (s *session) settleOpenItems(next api.NextDeploy, lacking []string, yes bool) bool {
+	if len(next.BeforeDeploying) == 0 && len(next.Blocked) == 0 && len(lacking) == 0 {
 		return true
 	}
 	out := s.progress()
-	if len(items) > 0 {
+	if len(next.BeforeDeploying) > 0 {
 		fmt.Fprintln(out, "Before deploying:")
 	}
-	for _, item := range items {
+	for _, item := range next.BeforeDeploying {
 		fmt.Fprintf(out, "  #%d %s\n", item.Number, oneLine(item.Text))
+	}
+	for _, pr := range next.Blocked {
+		fmt.Fprintln(out, blockedLine(pr))
 	}
 	for _, line := range lacking {
 		fmt.Fprintln(out, line)
@@ -476,6 +494,31 @@ func (s *session) settleOpenItems(items []api.BeforeDeployingItem, lacking []str
 	}
 	fmt.Fprint(out, "Deploy anyway? [y/N] ")
 	return s.answeredYes()
+}
+
+// nextDeployFailure reports why Cadre didn't say what the deploy needs first. An app Cadre has no card for, as when it
+// was unset since the repo was read, is named; anything else is reported as for any call on the repo.
+func (s *session) nextDeployFailure(err error, repo, app string) int {
+	if app != "" && errors.Is(err, api.ErrTargetNotFound) {
+		name := oneLine(repo)
+		fmt.Fprintf(s.env.Stderr, "%s has no app %s. Run cadre repo show %s.\n", name, oneLine(app), name)
+		return 1
+	}
+	return s.repoFailure(err, repo, "")
+}
+
+// blockedLine says what should go before a Blocked pull request: the earlier step's app or repo, with its pull request
+// when the step has one, or "an earlier step" when Cadre names none. The name comes from the server, so it is put on
+// one line.
+func blockedLine(pr api.BlockedPullRequest) string {
+	first := oneLine(pr.WaitsFor.Name)
+	if first == "" {
+		first = "an earlier step"
+	}
+	if pr.WaitsFor.Number == nil {
+		return fmt.Sprintf("#%d is Blocked: %s should deploy first.", pr.Number, first)
+	}
+	return fmt.Sprintf("#%d is Blocked: %s should run #%d first.", pr.Number, first, *pr.WaitsFor.Number)
 }
 
 // oneLine replaces every rune that doesn't print with a space. Item text comes from pull request descriptions, so it is

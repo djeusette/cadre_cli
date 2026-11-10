@@ -1167,3 +1167,61 @@ func TestVercelDeployPrintsAnAppNameOnOneLine(t *testing.T) {
 		})
 	}
 }
+
+// One question covers the open items, the Blocked pull requests and what the commit lacks, in that order.
+func TestVercelDeployAsksAboutABlockedPullRequest(t *testing.T) {
+	t.Run("a yes deploys", func(t *testing.T) {
+		r := newVercelRig(t)
+		live := r.pushedElsewhere("production")
+		r.app("web").last = lastDeploy(live)
+		r.items = openItems
+		r.blocked = blockedOnAPI
+		r.h.deps.Stdin = strings.NewReader("y\n")
+		sha := r.head()
+
+		if code := r.deploy("--all"); code != 0 {
+			t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+		}
+		if want := openItemsText + blockedOnAPIText + lacksLine("web", live) + deployQuestion + vercelDeployedOutput(sha, "admin, web"); r.h.out.String() != want {
+			t.Errorf("stdout = %q, want %q", r.h.out, want)
+		}
+	})
+	t.Run("nothing to read deploys nothing", func(t *testing.T) {
+		r := newVercelRig(t)
+		r.blocked = blockedOnAPI
+
+		code := r.deploy("--all")
+
+		if code != 1 || r.h.errb.String() != refusedAnswer {
+			t.Errorf("code = %d, stderr %q, want %q", code, r.h.errb, refusedAnswer)
+		}
+		if want := blockedOnAPIText + deployQuestion + "\n"; r.h.out.String() != want {
+			t.Errorf("stdout = %q, want %q", r.h.out, want)
+		}
+		r.assertNothingRan()
+	})
+}
+
+// --app asks Cadre about that app's pull requests alone, --all about the repo's.
+func TestVercelDeployAppAsksNextDeployForThatApp(t *testing.T) {
+	for _, tc := range []struct {
+		flags []string
+		apps  string
+		want  string
+	}{
+		{[]string{"--app", "web"}, "1", "app=web"},
+		{[]string{"--all"}, "2", ""},
+	} {
+		t.Run(strings.Join(tc.flags, " "), func(t *testing.T) {
+			r := newVercelRig(t)
+			t.Setenv("FAKE_VERCEL_APPS", tc.apps)
+
+			if code := r.deploy(tc.flags...); code != 0 {
+				t.Fatalf("code = %d, stderr %q", code, r.h.errb)
+			}
+			if want := []string{tc.want}; !slices.Equal(r.nextQueries, want) {
+				t.Errorf("next-deploy queries = %q, want %q", r.nextQueries, want)
+			}
+		})
+	}
+}
