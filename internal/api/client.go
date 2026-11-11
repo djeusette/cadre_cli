@@ -530,11 +530,14 @@ type TargetStore struct {
 	PublicBuild *StoreBuild `json:"public_build"`
 }
 
-// StoreBuild is a build that is public in a store. Version is nil when the store gave none.
+// StoreBuild is a build that is public in a store. Version is nil when the store gave none. Tag and Commit are nil
+// when no tag names the build, and when the server is older than the tags (it sends neither key).
 type StoreBuild struct {
 	Version     *string   `json:"version"`
 	BuildNumber int       `json:"build_number"`
 	Since       time.Time `json:"since"`
+	Tag         *string   `json:"tag"`
+	Commit      *string   `json:"commit"`
 }
 
 // LastDeploy is a target's latest deploy. Commit is nil when cadre could not tie the deploy to a commit.
