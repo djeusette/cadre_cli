@@ -530,13 +530,12 @@ type TargetStore struct {
 	PublicBuild *StoreBuild `json:"public_build"`
 }
 
-// StoreBuild is a build that is public in a store. Version is nil when the store gave none. Tag and Commit are nil
-// when no tag names the build, and when the server is older than the tags (it sends neither key).
+// StoreBuild is a build that is public in a store. Version is nil when the store gave none. Commit is nil when no
+// prod tag names the build, and when the server is older than the tags (it sends no key).
 type StoreBuild struct {
 	Version     *string   `json:"version"`
 	BuildNumber int       `json:"build_number"`
 	Since       time.Time `json:"since"`
-	Tag         *string   `json:"tag"`
 	Commit      *string   `json:"commit"`
 }
 

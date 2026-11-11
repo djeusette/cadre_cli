@@ -402,7 +402,7 @@ func publicBuildText(b *api.StoreBuild) string {
 	}
 }
 
-// commitText is ` + "`" + ` · commit <first 7 characters>` + "`" + ` for a build with a commit, and empty for one without.
+// commitText is " · commit <first 7 characters>" for a build with a commit, and empty without one.
 func commitText(b *api.StoreBuild) string {
 	if b.Commit == nil || *b.Commit == "" {
 		return ""
