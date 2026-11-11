@@ -3767,3 +3767,93 @@ func TestGooglePlayAccountAddWithoutAKeySendsNothing(t *testing.T) {
 		t.Errorf("stderr = %q", h.errb)
 	}
 }
+
+// dragTarget writes content to a file named like a second download, with a space and parentheses.
+func dragTarget(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "AuthKey_2X9R4HXF34 (1).p8")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// typedForms is how a terminal hands over path: as is, escaped like a dragged file, and in each kind of quotes.
+func typedForms(path string) map[string]string {
+	escaped := strings.NewReplacer(" ", `\ `, "(", `\(`, ")", `\)`).Replace(path)
+	return map[string]string{
+		"as is":         path,
+		"escaped":       escaped,
+		"single quotes": "'" + path + "'",
+		"double quotes": `"` + path + `"`,
+		"padded quotes": "  '" + path + "' ",
+	}
+}
+
+func TestAppStoreKeyAddUnderstandsADraggedOrQuotedPath(t *testing.T) {
+	path := dragTarget(t, p8Text+"\n")
+	for name, typed := range typedForms(path) {
+		var got flyRequest
+		srv := flyServer(t, 200, storeAdded, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		h.typePath(typed, nil)
+
+		if code := cli.Run([]string{"app-store", "key", "add", "2X9R4HXF34", "--issuer", "iss"}, h.deps); code != 0 {
+			t.Errorf("%s: code = %d, stderr %q", name, code, h.errb)
+			continue
+		}
+		if !strings.Contains(got.raw, "MADEUPKEYTEXT") {
+			t.Errorf("%s: request = %+v", name, got)
+		}
+	}
+}
+
+func TestGooglePlayAccountAddUnderstandsADraggedOrQuotedPath(t *testing.T) {
+	path := dragTarget(t, serviceJSON)
+	for name, typed := range typedForms(path) {
+		var got flyRequest
+		srv := flyServer(t, 200, playAdded, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		h.typePath(typed, nil)
+
+		if code := cli.Run([]string{"google-play", "account", "add"}, h.deps); code != 0 {
+			t.Errorf("%s: code = %d, stderr %q", name, code, h.errb)
+			continue
+		}
+		var body struct{ Token string }
+		_ = json.Unmarshal([]byte(got.raw), &body)
+		if body.Token != serviceJSON {
+			t.Errorf("%s: request = %+v", name, got)
+		}
+	}
+}
+
+func TestAKeyPathWithABackslashInsideQuotesIsKept(t *testing.T) {
+	// Inside quotes a backslash is a character of the name, not an escape.
+	path := filepath.Join(t.TempDir(), `odd\name.p8`)
+	if err := os.WriteFile(path, []byte(p8Text), 0o600); err != nil {
+		t.Skip("this file system refuses a backslash in a name")
+	}
+	var got flyRequest
+	srv := flyServer(t, 200, storeAdded, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	h.typePath("'"+path+"'", nil)
+
+	if code := cli.Run([]string{"app-store", "key", "add", "2X9R4HXF34", "--issuer", "iss"}, h.deps); code != 0 || !strings.Contains(got.raw, "MADEUPKEYTEXT") {
+		t.Errorf("code = %d, stderr %q, request %+v", code, h.errb, got)
+	}
+}
+
+func TestAKeyPathEndingInABackslashIsKeptAsTyped(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 200, storeAdded, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	h.typePath(`/no/such/folder\`, nil)
+
+	if code := cli.Run([]string{"app-store", "key", "add", "2X9R4HXF34", "--issuer", "iss"}, h.deps); code != 1 {
+		t.Errorf("code = %d", code)
+	}
+	if !strings.Contains(h.errb.String(), `open /no/such/folder\: `) || got.calls != 0 {
+		t.Errorf("stderr = %q, calls %d", h.errb, got.calls)
+	}
+}

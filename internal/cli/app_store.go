@@ -109,12 +109,38 @@ func (s *session) readKeyFile(prompt string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	path, err = expandHome(strings.TrimSpace(path))
+	path, err = expandHome(unquotePath(strings.TrimSpace(path)))
 	if err != nil || path == "" {
 		return "", err
 	}
 	raw, err := os.ReadFile(path)
 	return strings.TrimSpace(string(raw)), err
+}
+
+// unquotePath undoes what a terminal does to a path: one pair of surrounding single or double quotes comes off and
+// what is inside is kept as typed; a path with no quotes loses the backslash in front of each escaped character, as
+// when a file is dragged onto the terminal. A path with neither is returned as it is.
+func unquotePath(path string) string {
+	if n := len(path); n >= 2 && (path[0] == '\'' || path[0] == '"') && path[n-1] == path[0] {
+		return path[1 : n-1]
+	}
+	if !strings.Contains(path, `\`) {
+		return path
+	}
+	var b strings.Builder
+	escaped := false
+	for _, r := range path {
+		if r == '\\' && !escaped {
+			escaped = true
+			continue
+		}
+		escaped = false
+		b.WriteRune(r)
+	}
+	if escaped {
+		b.WriteByte('\\')
+	}
+	return b.String()
 }
 
 // expandHome replaces a leading ~/ with the home folder.
