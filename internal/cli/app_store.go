@@ -14,7 +14,10 @@ import (
 	"github.com/djeusette/cadre_cli/internal/api"
 )
 
-const msgNoKey = "No key given. Pipe it in, or give the path of its file when asked."
+const (
+	msgNoKey  = "No key given. Pipe it in, or give the path of its file when asked."
+	msgNoPath = "No path given. Type the path of the key file when asked, or pipe the key in."
+)
 
 // runAppStore dispatches `app-store key add <key-id> --issuer <issuer-id>` and `app-store key remove <key-id>`.
 func runAppStore(env Env, asJSON bool, args []string) int {
@@ -74,6 +77,10 @@ func addAppStoreKey(ctx context.Context, s *session, keyID, issuer string) int {
 // printed.
 func (s *session) keyFileText(prompt string) (string, bool) {
 	text, err := s.readKeyFile(prompt)
+	if errors.Is(err, io.EOF) {
+		fmt.Fprintln(s.env.Stderr, msgNoPath)
+		return "", false
+	}
 	if err != nil {
 		fmt.Fprintf(s.env.Stderr, "Could not read the key file: %v\n", err)
 		return "", false

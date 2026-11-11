@@ -130,14 +130,12 @@ func (s *session) accountFailure(err error, platform, noun, name string) int {
 // inUseAdvice says what to do about an account that apps still read. A store account is replaced by another one, and
 // each app is set again to read it.
 func inUseAdvice(platform string) string {
-	switch platform {
-	case "app_store":
-		return "Add the key that replaces it, set each of those apps again with cadre repo set, then remove this one."
-	case "google_play":
-		return "Add the account that replaces it, set each of those apps again with cadre repo set, then remove this one."
-	default:
+	replacement := map[string]string{"app_store": "key", "google_play": "account"}
+	noun, isStore := replacement[platform]
+	if !isStore {
 		return "Unset or move those targets first."
 	}
+	return "Add the " + noun + " that replaces it, set each of those apps again with cadre repo set, then remove this one."
 }
 
 // tokenRefused says a platform refused the credentials of an account.

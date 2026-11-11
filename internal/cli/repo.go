@@ -168,7 +168,6 @@ func setTarget(ctx context.Context, s *session, repo, platform, name string, set
 	return 0
 }
 
-// storeList is a mobile app's stores, each with the account reading it, as the line after a set names them.
 // storeListSuffix is ": " and the stores, or nothing when the answer lists none.
 func storeListSuffix(stores []api.TargetStore) string {
 	if len(stores) == 0 {
@@ -177,6 +176,7 @@ func storeListSuffix(stores []api.TargetStore) string {
 	return ": " + storeList(stores)
 }
 
+// storeList is a mobile app's stores, each with the account reading it, as the line after a set names them.
 func storeList(stores []api.TargetStore) string {
 	items := make([]string, len(stores))
 	for i, st := range stores {

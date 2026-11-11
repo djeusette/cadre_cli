@@ -3610,3 +3610,160 @@ func TestRepoSetMobileAppListingNoStore(t *testing.T) {
 		t.Errorf("stdout = %q, want %q", h.out, want)
 	}
 }
+
+func TestGooglePlayAccountRemoveFailures(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status int
+		body   string
+		want   func(server string) string
+	}{
+		"not found": {404, `{"error":"account_not_found"}`, func(server string) string {
+			return "No Google Play account " + playEmail + " on " + server + ".\n"
+		}},
+		"platform unreachable": {502, `{"error":"platform_unreachable","platform":"google_play"}`, func(string) string {
+			return "Cadre couldn't reach Google Play. Try again in a minute.\n"
+		}},
+		"signed out": {401, `{"error":"unauthorized"}`, func(server string) string {
+			return "Your key for " + server + " is no longer valid. Run cadre login --url " + server + ".\n"
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got flyRequest
+			srv := flyServer(t, tc.status, tc.body, &got)
+			h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+			if code := cli.Run([]string{"google-play", "account", "remove", playEmail}, h.deps); code != 1 {
+				t.Errorf("code = %d", code)
+			}
+			if want := tc.want(srv.URL); h.errb.String() != want || h.out.Len() != 0 {
+				t.Errorf("stderr = %q, want %q, stdout %q", h.errb, want, h.out)
+			}
+		})
+	}
+}
+
+func TestMobileAccountsWhenCadreCannotBeReached(t *testing.T) {
+	for name, tc := range map[string]struct {
+		args  []string
+		stdin string
+	}{
+		"google play remove": {[]string{"google-play", "account", "remove", playEmail}, ""},
+		"app store remove":   {[]string{"app-store", "key", "remove", "2X9R4HXF34"}, ""},
+		"google play add":    {[]string{"google-play", "account", "add"}, serviceJSON},
+		"app store add":      {[]string{"app-store", "key", "add", "2X9R4HXF34", "--issuer", "iss"}, p8Text},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got flyRequest
+			srv := flyServer(t, 200, `{}`, &got)
+			h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+			h.pipe(tc.stdin)
+			srv.Close()
+
+			if code := cli.Run(tc.args, h.deps); code != 1 {
+				t.Errorf("code = %d", code)
+			}
+			if !strings.HasPrefix(h.errb.String(), "Could not complete the request to "+srv.URL+": ") || h.out.Len() != 0 {
+				t.Errorf("stderr = %q, stdout %q", h.errb, h.out)
+			}
+			if strings.Contains(h.errb.String(), "MADEUPKEYTEXT") || strings.Contains(h.errb.String(), "made-up") {
+				t.Errorf("the key was printed: %q", h.errb)
+			}
+		})
+	}
+}
+
+func TestMobileAccountsNotSignedIn(t *testing.T) {
+	for name, args := range map[string][]string{
+		"app store add":   {"app-store", "key", "add", "2X9R4HXF34", "--issuer", "iss"},
+		"google play add": {"google-play", "account", "add"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got flyRequest
+			srv := flyServer(t, 200, storeAdded, &got)
+			h := newHarness(t, srv, nil)
+			asked := 0
+			h.typePath(keyFile(t, p8Text), &asked)
+
+			if code := cli.Run(args, h.deps); code != 1 {
+				t.Errorf("code = %d", code)
+			}
+			if h.errb.String() != "Not signed in. Run cadre login --url <url>.\n" || asked != 0 || got.calls != 0 {
+				t.Errorf("stderr = %q, asked %d, calls %d", h.errb, asked, got.calls)
+			}
+		})
+	}
+}
+
+func TestMobileAccountsUnknownSubcommand(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 200, `{}`, &got)
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"app-store", "token", "add"}, "cadre app-store has no token command.\nRun cadre help app-store to see its commands.\n"},
+		{[]string{"app-store", "key", "ad", "x"}, "cadre app-store key has no ad command.\nDid you mean cadre app-store key add?\nRun cadre help app-store key to see its commands.\n"},
+		{[]string{"google-play", "key", "add"}, "cadre google-play has no key command.\nRun cadre help google-play to see its commands.\n"},
+		{[]string{"google-play", "account", "ad"}, "cadre google-play account has no ad command.\nDid you mean cadre google-play account add?\nRun cadre help google-play account to see its commands.\n"},
+	} {
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+		if code := cli.Run(tc.args, h.deps); code != 2 || h.errb.String() != tc.want || got.calls != 0 {
+			t.Errorf("%q: code = %d, stderr %q, calls %d", tc.args, code, h.errb, got.calls)
+		}
+	}
+}
+
+// A key file's path that cannot be read, or none typed, sends nothing and says why.
+func TestMobileAccountsKeyPathProblems(t *testing.T) {
+	for name, tc := range map[string]struct {
+		args []string
+		read func() (string, error)
+		home string
+		want string
+	}{
+		"end of input at the prompt": {[]string{"app-store", "key", "add", "2X9R4HXF34", "--issuer", "iss"},
+			func() (string, error) { return "", io.EOF }, "/h", msgNoPathText},
+		"end of input at the prompt, google play": {[]string{"google-play", "account", "add"},
+			func() (string, error) { return "", io.EOF }, "/h", msgNoPathText},
+		"the terminal fails": {[]string{"app-store", "key", "add", "2X9R4HXF34", "--issuer", "iss"},
+			func() (string, error) { return "", errors.New("no tty") }, "/h", "Could not read the key file: no tty\n"},
+		"the terminal fails, google play": {[]string{"google-play", "account", "add"},
+			func() (string, error) { return "", errors.New("no tty") }, "/h", "Could not read the key file: no tty\n"},
+		"a home path without a home": {[]string{"app-store", "key", "add", "2X9R4HXF34", "--issuer", "iss"},
+			func() (string, error) { return "~/AuthKey.p8", nil }, "", "Could not read the key file: $HOME is not defined\n"},
+		"nothing typed": {[]string{"google-play", "account", "add"},
+			func() (string, error) { return "  \n", nil }, "/h", "No key given. Pipe it in, or give the path of its file when asked.\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("HOME", tc.home)
+			var got flyRequest
+			srv := flyServer(t, 200, storeAdded, &got)
+			h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+			h.typePath("", nil)
+			h.deps.ReadPath = tc.read
+
+			if code := cli.Run(tc.args, h.deps); code != 1 {
+				t.Errorf("code = %d", code)
+			}
+			if !strings.HasSuffix(h.errb.String(), tc.want) || got.calls != 0 || h.out.Len() != 0 {
+				t.Errorf("stderr = %q, want suffix %q, calls %d, stdout %q", h.errb, tc.want, got.calls, h.out)
+			}
+		})
+	}
+}
+
+const msgNoPathText = "No path given. Type the path of the key file when asked, or pipe the key in.\n"
+
+func TestGooglePlayAccountAddWithoutAKeySendsNothing(t *testing.T) {
+	var got flyRequest
+	srv := flyServer(t, 200, playAdded, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+	h.pipe(" \n")
+
+	if code := cli.Run([]string{"google-play", "account", "add"}, h.deps); code != 1 || got.calls != 0 {
+		t.Errorf("code = %d, calls %d", code, got.calls)
+	}
+	if want := "No key given. Pipe it in, or give the path of its file when asked.\n"; h.errb.String() != want {
+		t.Errorf("stderr = %q", h.errb)
+	}
+}
