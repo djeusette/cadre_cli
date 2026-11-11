@@ -516,7 +516,25 @@ type Target struct {
 	StatusURLNote string     `json:"status_url_note"`
 	Live          string     `json:"live"`
 	NotLiveSince  *time.Time `json:"not_live_since"`
-	Raw           []byte     `json:"-"`
+	// Stores are a mobile app's stores, each with the build that is public there; empty on other platforms.
+	Stores []TargetStore `json:"stores"`
+	Raw    []byte        `json:"-"`
+}
+
+// TargetStore is one store a mobile app is sold on. PublicBuild is nil until cadre has seen a build there.
+type TargetStore struct {
+	Store       string      `json:"store"` // app_store or google_play
+	Label       string      `json:"label"`
+	App         string      `json:"app"`     // the app's id in that store
+	Account     string      `json:"account"` // the key or service account that reads it
+	PublicBuild *StoreBuild `json:"public_build"`
+}
+
+// StoreBuild is a build that is public in a store. Version is nil when the store gave none.
+type StoreBuild struct {
+	Version     *string   `json:"version"`
+	BuildNumber int       `json:"build_number"`
+	Since       time.Time `json:"since"`
 }
 
 // LastDeploy is a target's latest deploy. Commit is nil when cadre could not tie the deploy to a commit.

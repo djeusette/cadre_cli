@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -15,7 +17,10 @@ import (
 	"github.com/djeusette/cadre_cli/internal/api"
 )
 
-const msgNoToken = "No token given. Pipe it in, or type it when asked."
+const (
+	msgNoToken = "No token given. Pipe it in, or type it when asked."
+	msgHTTPS   = "Cadre sends a key or a token over https only. Sign in to an https address first: cadre login --url https://<your cadre>."
+)
 
 // runFly dispatches `fly org add <org>` and `fly org remove <org>`.
 func runFly(env Env, asJSON bool, args []string) int {
@@ -59,6 +64,18 @@ func addAccount(ctx context.Context, s *session, platform, noun, name string) in
 		return 1
 	}
 
+	return sendAccount(ctx, s, platform, noun, name, token, func(added api.Account) string {
+		return fmt.Sprintf("Connected the %s %s %s: its token reads %s.", displayName(platform), noun, added.Name, apps(added.Apps))
+	})
+}
+
+// sendAccount sends the token for the platform's account name and prints connected's line, or the answer as JSON.
+func sendAccount(ctx context.Context, s *session, platform, noun, name, token string, connected func(api.Account) string) int {
+	if !sendsSafely(s.baseURL) {
+		fmt.Fprintln(s.env.Stderr, msgHTTPS)
+		return 1
+	}
+
 	added, err := s.client.AddAccount(ctx, platform, name, token)
 	if err != nil {
 		return s.accountFailure(err, platform, noun, name)
@@ -68,8 +85,29 @@ func addAccount(ctx context.Context, s *session, platform, noun, name string) in
 		fmt.Fprint(s.env.Stdout, string(added.Raw))
 		return 0
 	}
-	fmt.Fprintf(s.env.Stdout, "Connected the %s %s %s: its token reads %s.\n", displayName(platform), noun, added.Name, apps(added.Apps))
+	fmt.Fprintln(s.env.Stdout, connected(added))
 	return 0
+}
+
+// sendsSafely reports whether a key or a token may be sent to the server at address: over https, or over http to a
+// loopback host, where nothing crosses a network. An address that can't be parsed is not safe.
+func sendsSafely(address string) bool {
+	u, err := url.Parse(address)
+	if err != nil {
+		return false
+	}
+	switch u.Scheme {
+	case "https":
+		return true
+	case "http":
+		host := u.Hostname()
+		if strings.EqualFold(host, "localhost") {
+			return true
+		}
+		ip := net.ParseIP(host)
+		return ip != nil && ip.IsLoopback()
+	}
+	return false
 }
 
 func removeAccount(ctx context.Context, s *session, platform, noun, name string) int {
@@ -103,7 +141,7 @@ func (s *session) accountFailure(err error, platform, noun, name string) int {
 	var inUse *api.AccountInUseError
 	switch {
 	case errors.Is(err, api.ErrTokenRefused):
-		fmt.Fprintf(s.env.Stderr, "%s refused this token for %s.\n", display, name)
+		fmt.Fprint(s.env.Stderr, tokenRefused(platform, name))
 	case errors.Is(err, api.ErrOrgNotFound):
 		fmt.Fprintf(s.env.Stderr, "%s has no %s %s that this token can read.\n", display, noun, name)
 	case errors.Is(err, api.ErrAccountNotFound):
@@ -113,11 +151,33 @@ func (s *session) accountFailure(err error, platform, noun, name string) int {
 	case errors.Is(err, api.ErrPlatformUnreachable):
 		fmt.Fprintf(s.env.Stderr, "Cadre couldn't reach %s. Try again in a minute.\n", display)
 	case errors.As(err, &inUse):
-		fmt.Fprintf(s.env.Stderr, "%s still reads %s. Unset or move those targets first.\n", name, strings.Join(inUse.Repos, ", "))
+		fmt.Fprintf(s.env.Stderr, "%s still reads %s. %s\n", name, strings.Join(inUse.Repos, ", "), inUseAdvice(platform))
 	default:
 		return s.failAPI(err)
 	}
 	return 1
+}
+
+// inUseAdvice says what to do about an account that apps still read. A store account is replaced by another one, and
+// each app is set again to read it.
+func inUseAdvice(platform string) string {
+	replacement := map[string]string{"app_store": "key", "google_play": "account"}
+	noun, isStore := replacement[platform]
+	if !isStore {
+		return "Unset or move those targets first."
+	}
+	return "Add the " + noun + " that replaces it, set each of those apps again with cadre repo set, then remove this one."
+}
+
+// tokenRefused says a platform refused the credentials of an account.
+func tokenRefused(platform, name string) string {
+	switch platform {
+	case "app_store":
+		return fmt.Sprintf("Apple refused the key %s. Check its key ID, its issuer ID and its .p8 file.\n", name)
+	case "google_play":
+		return "Google refused this service account's key.\n"
+	}
+	return fmt.Sprintf("%s refused this token for %s.\n", displayName(platform), name)
 }
 
 // readToken is the token for the named account, trimmed. When stdin is piped it is read whole. On a terminal the

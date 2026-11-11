@@ -26,7 +26,7 @@ const (
 	usageSpecPull         = "Usage: cadre spec pull <project>/<n> [-o <file>]\nRun cadre help spec pull for details.\n"
 	usageSpecPush         = "Usage: cadre spec push <project>/<n> <file> [--base <version>]\nRun cadre help spec push for details.\n"
 	usagePrLink           = "Usage: cadre pr link <pr-url> <project>/<n> [--app <name>]\n       cadre pr link <pr-url> --none\nRun cadre help pr link for details.\n"
-	usageRepoSet          = "Usage: cadre repo set <repo> --fly-app <app> [--name <app>] [--fly-config <file>]\n       cadre repo set <repo> --vercel-project <id> --name <app> --vercel-dir <folder>\n       cadre repo set <repo> --platform <name>\nRun cadre help repo set for details.\n"
+	usageRepoSet          = "Usage: cadre repo set <repo> --fly-app <app> [--name <app>] [--fly-config <file>]\n       cadre repo set <repo> --vercel-project <id> --name <app> --vercel-dir <folder>\n       cadre repo set <repo> --platform <name>\n       cadre repo set <repo> [--app-store-app <id>] [--play-package <name>]\nRun cadre help repo set for details.\n"
 	usageRepoUnset        = "Usage: cadre repo unset <repo> --name <app>\n       cadre repo unset <repo> --platform <name> [--name <app>]\nRun cadre help repo unset for details.\n"
 	usageRepoShow         = "Usage: cadre repo show <repo>\nRun cadre help repo show for details.\n"
 	usageDeploy           = "Usage: cadre deploy <repo> [--app <name>|--all] [--yes]\nRun cadre help deploy for details.\n"
@@ -43,17 +43,22 @@ var (
 		"login", "whoami",
 		"project create", "project pull", "project update", "project archive", "project unarchive",
 		"spec pull", "spec push", "pr link", "repo set", "repo unset", "repo show",
-		"fly org add", "fly org remove", "vercel team add", "vercel team remove", "deploy", "upgrade", "version", "help",
+		"fly org add", "fly org remove", "vercel team add", "vercel team remove",
+		"app-store key add", "app-store key remove", "google-play account add", "google-play account remove", "deploy", "upgrade", "version", "help",
 	}
 	everyGroup = map[string][]string{
-		"project":     {"create", "pull", "update", "archive", "unarchive"},
-		"spec":        {"pull", "push"},
-		"pr":          {"link"},
-		"repo":        {"set", "unset", "show"},
-		"fly":         {"org add", "org remove"},
-		"fly org":     {"add", "remove"},
-		"vercel":      {"team add", "team remove"},
-		"vercel team": {"add", "remove"},
+		"project":             {"create", "pull", "update", "archive", "unarchive"},
+		"spec":                {"pull", "push"},
+		"pr":                  {"link"},
+		"repo":                {"set", "unset", "show"},
+		"fly":                 {"org add", "org remove"},
+		"fly org":             {"add", "remove"},
+		"vercel":              {"team add", "team remove"},
+		"vercel team":         {"add", "remove"},
+		"app-store":           {"key add", "key remove"},
+		"app-store key":       {"add", "remove"},
+		"google-play":         {"account add", "account remove"},
+		"google-play account": {"add", "remove"},
 	}
 )
 
@@ -515,6 +520,38 @@ func TestStatusURLFlagsAreDocumentedInStep(t *testing.T) {
 			if !strings.Contains(said(text), want) {
 				t.Errorf("%s doesn't say %q", name, want)
 			}
+		}
+	}
+}
+
+func TestHelpSaysWhatToDoWithAKeyInUse(t *testing.T) {
+	srv, _ := helpServer(t)
+	flat := func(args ...string) string {
+		return strings.Join(strings.Fields(helpFor(t, srv, args...)), " ")
+	}
+	for page, want := range map[string]string{
+		"app-store key add":       "new key has a new ID",
+		"app-store key remove":    "new key has a new ID",
+		"google-play account add": "with a new JSON key replaces the old key",
+		"repo set":                "at least one of the two",
+		"help":                    "as a milestone's newest spec",
+	} {
+		args := append([]string{"help"}, strings.Fields(page)...)
+		if page == "help" {
+			args = []string{"help"}
+		}
+		if got := flat(args...); !strings.Contains(got, want) {
+			t.Errorf("help %s lacks %q", page, want)
+		}
+	}
+}
+
+func TestHelpOfTheAddCommandsSaysAKeyGoesOverHTTPSOnly(t *testing.T) {
+	srv, _ := helpServer(t)
+	for _, page := range []string{"fly org add", "vercel team add", "app-store key add", "google-play account add"} {
+		got := strings.Join(strings.Fields(helpFor(t, srv, append([]string{"help"}, strings.Fields(page)...)...)), " ")
+		if !strings.Contains(got, "sent over https only, or to a loopback address") {
+			t.Errorf("help %s lacks the https sentence", page)
 		}
 	}
 }

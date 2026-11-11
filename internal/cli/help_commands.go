@@ -16,6 +16,10 @@ var helpGroups = []groupHelp{
 	{"fly org", "Connect Fly orgs, so cadre can read their apps' deploys"},
 	{"vercel", "Connect Vercel teams, so cadre can read their apps' deploys"},
 	{"vercel team", "Connect Vercel teams, so cadre can read their apps' deploys"},
+	{"app-store", "Connect App Store Connect keys, so cadre can read an app's public build"},
+	{"app-store key", "Connect App Store Connect keys, so cadre can read an app's public build"},
+	{"google-play", "Connect Google Play service accounts, so cadre can read an app's public build"},
+	{"google-play account", "Connect Google Play service accounts, so cadre can read an app's public build"},
 }
 
 // helpSections is every command, in the overview's order.
@@ -48,7 +52,7 @@ that URL, and only that one.`,
 		commands: []commandHelp{
 			{
 				name:    "project create",
-				summary: "Register a project and its milestones from a JSON file",
+				summary: "Register a project and its milestones from JSON",
 				forms:   []string{"<file>"},
 				about: `Each milestone's repos are its deploy order, and its spec is markdown. Only
 name, slug, end_goal and each milestone's title and repos are required:
@@ -72,7 +76,7 @@ name, slug, end_goal and each milestone's title and repos are required:
 			},
 			{
 				name:    "project pull",
-				summary: "Print a project as the JSON file project update takes",
+				summary: "Print a project as the JSON project update takes",
 				forms:   []string{"<slug> [-o <file>]"},
 				about:   "The file has the version and milestone numbers that update needs.",
 				flags: []helpRow{
@@ -132,7 +136,7 @@ wish-reminders/2. The spec comes exactly as stored.`,
 			},
 			{
 				name:    "spec push",
-				summary: "Upload a markdown file as a milestone's newest spec",
+				summary: "Upload markdown as a milestone's newest spec",
 				forms:   []string{"<project>/<n> <file> [--base <version>]"},
 				about: `<project>/<n> is a project's slug and a milestone number, such as
 wish-reminders/2. The file is stored unchanged, and cadre prints the project's
@@ -183,8 +187,10 @@ hand changes with it.`,
 					"<repo> --fly-app <app> [--name <app>] [--fly-config <file>]",
 					"<repo> --vercel-project <id> --name <app> --vercel-dir <folder>",
 					"<repo> --platform <name>",
+					"<repo> [--app-store-app <id>] [--play-package <name>]",
 				},
-				about: `<repo> is the repo's name in Cadre, such as shop-api. Setting an app again (the
+				about: `The last form is a mobile app: it needs at least one of the two store flags.
+<repo> is the repo's name in Cadre, such as shop-api. Setting an app again (the
 same name) replaces its settings, so pass --fly-app, --fly-config and
 --status-url each time, and --name when the app's name isn't its Fly app's. Fly
 apps are found through the orgs connected with cadre fly org add.
@@ -202,7 +208,13 @@ With neither --status-url nor --no-status-url, an app takes its platform's
 default: a Vercel project's production domain when it answers, and none on Fly,
 whose health checks count. repo set prints the URL it kept, or why it kept none.
 Setting a Vercel app with no status URL can take a few seconds while cadre calls
-its domain.`,
+its domain.
+
+A mobile app is sold on the App Store, Google Play or both. Give its App Store
+id, its Google Play package, or both: cadre then asks each store, every 15
+minutes, which build is public, through the keys connected with cadre app-store
+key add and cadre google-play account add. repo show lists each store's build.
+--name names the app, as for Fly. A mobile app takes no status URL.`,
 				flags: []helpRow{
 					{"--fly-app <app>", "Connect the repo to a Fly app, which cadre then tracks"},
 					{"--fly-config <file>", "The Fly config file it deploys with, for the whole team"},
@@ -211,6 +223,8 @@ its domain.`,
 					{"--vercel-project <id>", "Connect the repo to a Vercel project cadre tracks"},
 					{"--name <app>", "The app's name: required on Vercel, else the Fly app's"},
 					{"--vercel-dir <folder>", "The folder the app deploys from. Vercel only"},
+					{"--app-store-app <id>", "Connect a mobile app to its App Store app"},
+					{"--play-package <name>", "Connect a mobile app to its Google Play package"},
 					{"--platform <name>", "Name any other platform, which shows as not tracked"},
 					jsonFlag,
 				},
@@ -221,6 +235,8 @@ its domain.`,
 					"cadre repo set shop-api --fly-app shop-api --status-url https://app.test/up",
 					"cadre repo set shop-api --fly-app shop-api --no-status-url",
 					"cadre repo set shop-api --vercel-project prj_1 --name site --vercel-dir web",
+					"cadre repo set club-app --app-store-app 6443635924",
+					"cadre repo set club-app --play-package club.colette.club --name club",
 					"cadre repo set shop-site --platform render",
 				},
 			},
@@ -252,7 +268,9 @@ the repo's target there, when the repo has one app on it.`,
 whether cadre can track it, and its last deploy: the date in UTC and the commit.
 A Vercel target starts with its name, and so does a Fly app whose name isn't its
 Fly app's. A line under the target gives its status URL, if it has one, and
-whether the app is live: live, not live since when, or not checked yet.`,
+whether the app is live: live, not live since when, or not checked yet. Under a
+mobile app, a line per store gives the build that is public there and since
+when, in UTC, and the key or service account that reads it.`,
 				flags:    []helpRow{jsonFlag},
 				examples: []string{"cadre repo show shop-api"},
 			},
@@ -262,7 +280,7 @@ whether the app is live: live, not live since when, or not checked yet.`,
 				forms:   []string{"<org>"},
 				about: `Pipe the token in, or type it when asked, with echo off. It is never an
 argument, so it stays out of your shell history. Adding an org again replaces
-its token.`,
+its token. The token is sent over https only, or to a loopback address.`,
 				flags:    []helpRow{jsonFlag},
 				examples: []string{"fly tokens create readonly -o acme -n cadre | cadre fly org add acme"},
 			},
@@ -281,7 +299,8 @@ its token.`,
 				about: `A Vercel token is made in Vercel's dashboard, under Account Settings, Tokens,
 scoped to the team: the Vercel CLI can't make one. Pipe it in, or type it when
 asked, with echo off. It is never an argument, so it stays out of your shell
-history. Adding a team again replaces its token.`,
+history. Adding a team again replaces its token. The token is sent over https
+only, or to a loopback address.`,
 				flags:    []helpRow{jsonFlag},
 				examples: []string{"cadre vercel team add colette-club"},
 			},
@@ -294,8 +313,50 @@ history. Adding a team again replaces its token.`,
 				examples: []string{"cadre vercel team remove colette-club"},
 			},
 			{
+				name:    "app-store key add",
+				summary: "Connect an App Store Connect API key",
+				forms:   []string{"<key-id> --issuer <issuer-id>"},
+				about: `The key is made in App Store Connect, under Users and Access, Integrations. Its
+key ID and the issuer ID are shown there, and its .p8 file downloads once. Cadre
+asks for the file's path, or reads the file's text from stdin. The key is never
+an argument, so it stays out of your shell history. Adding a key again replaces
+it. A new key has a new ID, so set each app again with cadre repo set after
+adding it, then remove the old key. The key is sent over https only, or to a
+loopback address.`,
+				flags:    []helpRow{{"--issuer <issuer-id>", "The issuer ID shown in App Store Connect. Required"}, jsonFlag},
+				examples: []string{"cadre app-store key add 2X9R4HXF34 --issuer 69a6de70-0000-47e3"},
+			},
+			{
+				name:    "app-store key remove",
+				summary: "Disconnect an App Store Connect API key",
+				forms:   []string{"<key-id>"},
+				about: `Refused while a repo's target still reads the key. A new key has a new ID, so
+add it, set each app again with cadre repo set, then remove the old key.`,
+				flags:    []helpRow{jsonFlag},
+				examples: []string{"cadre app-store key remove 2X9R4HXF34"},
+			},
+			{
+				name:    "google-play account add",
+				summary: "Connect a Google Play service account",
+				about: `Pass the service account's JSON key file: cadre asks for its path, or reads its
+text from stdin. The account is named by the file's client_email. The key is
+never an argument, so it stays out of your shell history. Adding an account
+again with a new JSON key replaces the old key. The key is sent over https
+only, or to a loopback address.`,
+				flags:    []helpRow{jsonFlag},
+				examples: []string{"cadre google-play account add < cadre-reader-key.json"},
+			},
+			{
+				name:     "google-play account remove",
+				summary:  "Disconnect a Google Play service account",
+				forms:    []string{"<email>"},
+				about:    "Refused while a repo's target still reads the account.",
+				flags:    []helpRow{jsonFlag},
+				examples: []string{"cadre google-play account remove cadre-reader@colette.iam.gserviceaccount.com"},
+			},
+			{
 				name:    "deploy",
-				summary: "Deploy a repo's Fly or Vercel apps, from a checkout of it",
+				summary: "Deploy a repo's Fly or Vercel apps from a checkout",
 				forms:   []string{"<repo> [--app <name>|--all] [--yes]"},
 				about: `<repo> is the repo's name in Cadre, such as shop-api. Run it anywhere in a
 checkout of that repo. A repo with one app needs no flag. A repo with several
@@ -334,7 +395,11 @@ first app deploys. It asks the same, in one question, when the commit lacks
 what a Vercel app runs now. With nothing to read, the answer is no. If Cadre
 can't say what is open or Blocked, nothing deploys. Right before fly or vercel
 runs, cadre checks the commit and the working tree again, and for Fly the
-branch, so a change made in the meantime stops the deploy.`,
+branch, so a change made in the meantime stops the deploy.
+
+A mobile app deploys nothing: its releases go through the stores. For a repo
+whose apps are all mobile, or with --app naming a mobile app, cadre says so
+and exits 1 before it looks at git. A repo with other apps deploys those.`,
 				flags: []helpRow{
 					{"--app <name>", "Deploy that app alone, by its name in Cadre"},
 					{"--all", "Deploy every app of the repo"},
