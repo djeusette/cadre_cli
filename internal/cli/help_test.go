@@ -545,3 +545,13 @@ func TestHelpSaysWhatToDoWithAKeyInUse(t *testing.T) {
 		}
 	}
 }
+
+func TestHelpOfTheAddCommandsSaysAKeyGoesOverHTTPSOnly(t *testing.T) {
+	srv, _ := helpServer(t)
+	for _, page := range []string{"fly org add", "vercel team add", "app-store key add", "google-play account add"} {
+		got := strings.Join(strings.Fields(helpFor(t, srv, append([]string{"help"}, strings.Fields(page)...)...)), " ")
+		if !strings.Contains(got, "sent over https only, or to a loopback address") {
+			t.Errorf("help %s lacks the https sentence", page)
+		}
+	}
+}

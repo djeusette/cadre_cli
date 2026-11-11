@@ -3857,3 +3857,113 @@ func TestAKeyPathEndingInABackslashIsKeptAsTyped(t *testing.T) {
 		t.Errorf("stderr = %q, calls %d", h.errb, got.calls)
 	}
 }
+
+// recordingTransport answers every request with body and keeps the URLs it was asked for.
+type recordingTransport struct {
+	body string
+	urls []string
+}
+
+func (r *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.urls = append(r.urls, req.URL.String())
+	return &http.Response{
+		StatusCode: 200,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(r.body)),
+		Request:    req,
+	}, nil
+}
+
+const msgHTTPS = "Cadre sends a key or a token over https only. Sign in to an https address first: cadre login --url https://<your cadre>.\n"
+
+// credentialCommands are the four commands that send a key or a token, each with a body the server would accept.
+var credentialCommands = []struct {
+	name  string
+	args  []string
+	input string
+	reply string
+}{
+	{"fly org add", []string{"fly", "org", "add", "acme"}, "fly_secret_token", addedBody},
+	{"vercel team add", []string{"vercel", "team", "add", "colette-club"}, "vercel_secret_token", vercelAddedBody},
+	{"app-store key add", []string{"app-store", "key", "add", "2X9R4HXF34", "--issuer", "iss"}, p8Text, storeAdded},
+	{"google-play account add", []string{"google-play", "account", "add"}, serviceJSON, playAdded},
+}
+
+func TestCredentialsAreSentOverHTTPSOrToALoopbackOnly(t *testing.T) {
+	refused := []string{
+		"http://cadre.example.com",
+		"http://cadre.example.com:4000",
+		"http://localhost.example.com",
+		"http://127.0.0.1.example.com",
+		"http://128.0.0.1",
+		"http://[::2]:4000",
+		"http://10.0.0.5",
+		"ftp://127.0.0.1",
+		"cadre.example.com",
+		"http://[::1",
+	}
+	sent := []string{
+		"https://cadre.example.com",
+		"HTTPS://cadre.example.com",
+		"http://127.0.0.1:4000",
+		"http://127.8.9.10",
+		"http://localhost:4000",
+		"http://LOCALHOST",
+		"http://[::1]:4000",
+		"https://127.0.0.1",
+	}
+	for _, c := range credentialCommands {
+		for _, url := range refused {
+			for _, asJSON := range []bool{false, true} {
+				rt := &recordingTransport{body: c.reply}
+				h := newHarness(t, httptest.NewServer(http.NotFoundHandler()), &config.Config{URL: url, APIKey: "cadre_abc"})
+				h.deps.HTTP = &http.Client{Transport: rt}
+				h.pipe(c.input)
+				args := c.args
+				if asJSON {
+					args = append(slices.Clone(args), "--json")
+				}
+
+				if code := cli.Run(args, h.deps); code != 1 {
+					t.Errorf("%s %s json=%v: code = %d", c.name, url, asJSON, code)
+				}
+				if h.errb.String() != msgHTTPS || h.out.Len() != 0 {
+					t.Errorf("%s %s json=%v: stderr = %q, stdout = %q", c.name, url, asJSON, h.errb, h.out)
+				}
+				if len(rt.urls) != 0 {
+					t.Errorf("%s %s json=%v: requests were sent: %v", c.name, url, asJSON, rt.urls)
+				}
+			}
+		}
+		for _, url := range sent {
+			rt := &recordingTransport{body: c.reply}
+			h := newHarness(t, httptest.NewServer(http.NotFoundHandler()), &config.Config{URL: url, APIKey: "cadre_abc"})
+			h.deps.HTTP = &http.Client{Transport: rt}
+			h.pipe(c.input)
+
+			if code := cli.Run(c.args, h.deps); code != 0 {
+				t.Errorf("%s %s: code = %d, stderr %q", c.name, url, code, h.errb)
+			}
+			if len(rt.urls) != 1 {
+				t.Errorf("%s %s: requests = %v", c.name, url, rt.urls)
+			}
+		}
+	}
+}
+
+func TestRemovingAnAccountNeedsNoHTTPS(t *testing.T) {
+	for name, args := range map[string][]string{
+		"fly":         {"fly", "org", "remove", "acme"},
+		"vercel":      {"vercel", "team", "remove", "colette-club"},
+		"app-store":   {"app-store", "key", "remove", "2X9R4HXF34"},
+		"google-play": {"google-play", "account", "remove", playEmail},
+	} {
+		rt := &recordingTransport{body: `{"platform":"fly","name":"x","apps":0}`}
+		h := newHarness(t, httptest.NewServer(http.NotFoundHandler()), &config.Config{URL: "http://cadre.example.com", APIKey: "cadre_abc"})
+		h.deps.HTTP = &http.Client{Transport: rt}
+
+		if code := cli.Run(args, h.deps); code != 0 || len(rt.urls) != 1 || strings.Contains(h.errb.String(), "https") {
+			t.Errorf("%s: code = %d, requests %v, stderr %q", name, code, rt.urls, h.errb)
+		}
+	}
+}

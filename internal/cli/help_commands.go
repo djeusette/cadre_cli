@@ -280,7 +280,7 @@ when, in UTC, and the key or service account that reads it.`,
 				forms:   []string{"<org>"},
 				about: `Pipe the token in, or type it when asked, with echo off. It is never an
 argument, so it stays out of your shell history. Adding an org again replaces
-its token.`,
+its token. The token is sent over https only, or to a loopback address.`,
 				flags:    []helpRow{jsonFlag},
 				examples: []string{"fly tokens create readonly -o acme -n cadre | cadre fly org add acme"},
 			},
@@ -299,7 +299,8 @@ its token.`,
 				about: `A Vercel token is made in Vercel's dashboard, under Account Settings, Tokens,
 scoped to the team: the Vercel CLI can't make one. Pipe it in, or type it when
 asked, with echo off. It is never an argument, so it stays out of your shell
-history. Adding a team again replaces its token.`,
+history. Adding a team again replaces its token. The token is sent over https
+only, or to a loopback address.`,
 				flags:    []helpRow{jsonFlag},
 				examples: []string{"cadre vercel team add colette-club"},
 			},
@@ -320,7 +321,8 @@ key ID and the issuer ID are shown there, and its .p8 file downloads once. Cadre
 asks for the file's path, or reads the file's text from stdin. The key is never
 an argument, so it stays out of your shell history. Adding a key again replaces
 it. A new key has a new ID, so set each app again with cadre repo set after
-adding it, then remove the old key.`,
+adding it, then remove the old key. The key is sent over https only, or to a
+loopback address.`,
 				flags:    []helpRow{{"--issuer <issuer-id>", "The issuer ID shown in App Store Connect. Required"}, jsonFlag},
 				examples: []string{"cadre app-store key add 2X9R4HXF34 --issuer 69a6de70-0000-47e3"},
 			},
@@ -339,7 +341,8 @@ add it, set each app again with cadre repo set, then remove the old key.`,
 				about: `Pass the service account's JSON key file: cadre asks for its path, or reads its
 text from stdin. The account is named by the file's client_email. The key is
 never an argument, so it stays out of your shell history. Adding an account
-again with a new JSON key replaces the old key.`,
+again with a new JSON key replaces the old key. The key is sent over https
+only, or to a loopback address.`,
 				flags:    []helpRow{jsonFlag},
 				examples: []string{"cadre google-play account add < cadre-reader-key.json"},
 			},

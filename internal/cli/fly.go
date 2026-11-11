@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -15,7 +17,10 @@ import (
 	"github.com/djeusette/cadre_cli/internal/api"
 )
 
-const msgNoToken = "No token given. Pipe it in, or type it when asked."
+const (
+	msgNoToken = "No token given. Pipe it in, or type it when asked."
+	msgHTTPS   = "Cadre sends a key or a token over https only. Sign in to an https address first: cadre login --url https://<your cadre>."
+)
 
 // runFly dispatches `fly org add <org>` and `fly org remove <org>`.
 func runFly(env Env, asJSON bool, args []string) int {
@@ -66,6 +71,11 @@ func addAccount(ctx context.Context, s *session, platform, noun, name string) in
 
 // sendAccount sends the token for the platform's account name and prints connected's line, or the answer as JSON.
 func sendAccount(ctx context.Context, s *session, platform, noun, name, token string, connected func(api.Account) string) int {
+	if !sendsSafely(s.baseURL) {
+		fmt.Fprintln(s.env.Stderr, msgHTTPS)
+		return 1
+	}
+
 	added, err := s.client.AddAccount(ctx, platform, name, token)
 	if err != nil {
 		return s.accountFailure(err, platform, noun, name)
@@ -77,6 +87,27 @@ func sendAccount(ctx context.Context, s *session, platform, noun, name, token st
 	}
 	fmt.Fprintln(s.env.Stdout, connected(added))
 	return 0
+}
+
+// sendsSafely reports whether a key or a token may be sent to the server at address: over https, or over http to a
+// loopback host, where nothing crosses a network. An address that can't be parsed is not safe.
+func sendsSafely(address string) bool {
+	u, err := url.Parse(address)
+	if err != nil {
+		return false
+	}
+	switch u.Scheme {
+	case "https":
+		return true
+	case "http":
+		host := u.Hostname()
+		if strings.EqualFold(host, "localhost") {
+			return true
+		}
+		ip := net.ParseIP(host)
+		return ip != nil && ip.IsLoopback()
+	}
+	return false
 }
 
 func removeAccount(ctx context.Context, s *session, platform, noun, name string) int {
