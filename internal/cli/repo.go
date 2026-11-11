@@ -152,8 +152,8 @@ func setTarget(ctx context.Context, s *session, repo, platform, name string, set
 	case s.asJSON:
 		fmt.Fprint(s.env.Stdout, string(target.Raw))
 	case target.Platform == "mobile":
-		fmt.Fprintf(s.env.Stdout, "Connected %s to its stores: %s.\nCadre asks each store which build is public every 15 minutes.\n",
-			target.Repo, storeList(target.Stores))
+		fmt.Fprintf(s.env.Stdout, "Connected %s to its stores%s.\nCadre asks each store which build is public every 15 minutes.\n",
+			target.Repo, storeListSuffix(target.Stores))
 	case target.Tracked:
 		fmt.Fprintln(s.env.Stdout, connectedLine(target))
 		if platform == "fly" && name == "" {
@@ -169,6 +169,14 @@ func setTarget(ctx context.Context, s *session, repo, platform, name string, set
 }
 
 // storeList is a mobile app's stores, each with the account reading it, as the line after a set names them.
+// storeListSuffix is ": " and the stores, or nothing when the answer lists none.
+func storeListSuffix(stores []api.TargetStore) string {
+	if len(stores) == 0 {
+		return ""
+	}
+	return ": " + storeList(stores)
+}
+
 func storeList(stores []api.TargetStore) string {
 	items := make([]string, len(stores))
 	for i, st := range stores {

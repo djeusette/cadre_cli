@@ -120,11 +120,24 @@ func (s *session) accountFailure(err error, platform, noun, name string) int {
 	case errors.Is(err, api.ErrPlatformUnreachable):
 		fmt.Fprintf(s.env.Stderr, "Cadre couldn't reach %s. Try again in a minute.\n", display)
 	case errors.As(err, &inUse):
-		fmt.Fprintf(s.env.Stderr, "%s still reads %s. Unset or move those targets first.\n", name, strings.Join(inUse.Repos, ", "))
+		fmt.Fprintf(s.env.Stderr, "%s still reads %s. %s\n", name, strings.Join(inUse.Repos, ", "), inUseAdvice(platform))
 	default:
 		return s.failAPI(err)
 	}
 	return 1
+}
+
+// inUseAdvice says what to do about an account that apps still read. A store account is replaced by another one, and
+// each app is set again to read it.
+func inUseAdvice(platform string) string {
+	switch platform {
+	case "app_store":
+		return "Add the key that replaces it, set each of those apps again with cadre repo set, then remove this one."
+	case "google_play":
+		return "Add the account that replaces it, set each of those apps again with cadre repo set, then remove this one."
+	default:
+		return "Unset or move those targets first."
+	}
 }
 
 // tokenRefused says a platform refused the credentials of an account.

@@ -2061,6 +2061,16 @@ func TestDeployAppNamingAMobileApp(t *testing.T) {
 	r.assertRefused(code, refusedMobileStore)
 }
 
+func TestDeployAllOnARepoOfMobileApps(t *testing.T) {
+	r := newDeployRig(t)
+	r.targets = mobileTarget + "," + strings.Replace(mobileTarget, "club-mobile", "admin-mobile", 1)
+	r.write(r.clone, "dirty.txt", "dirty")
+
+	code := r.deploy("--all")
+
+	r.assertRefused(code, refusedMobileStore)
+}
+
 func TestDeployARepoWithAFlyAppAndAMobileApp(t *testing.T) {
 	r := newDeployRig(t)
 	r.targets = flyTarget + "," + mobileTarget

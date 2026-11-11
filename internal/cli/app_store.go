@@ -33,10 +33,16 @@ func runAppStore(env Env, asJSON bool, args []string) int {
 		if !ok || issuer == "" {
 			return usageError(env, "app-store key add")
 		}
+		if blankArgument(rest) {
+			return usageError(env, "app-store key add")
+		}
 		return runCommand(env, asJSON, "app-store key add", rest, 1, func(ctx context.Context, s *session, a []string) int {
 			return addAppStoreKey(ctx, s, strings.ToUpper(strings.TrimSpace(a[0])), issuer)
 		})
 	case "remove":
+		if blankArgument(rest) {
+			return usageError(env, "app-store key remove")
+		}
 		return runCommand(env, asJSON, "app-store key remove", rest, 1, func(ctx context.Context, s *session, a []string) int {
 			return removeAccount(ctx, s, "app_store", "Connect key", strings.ToUpper(strings.TrimSpace(a[0])))
 		})
@@ -129,4 +135,9 @@ func readLineFromTTY() (string, error) {
 		return "", err
 	}
 	return line, nil
+}
+
+// blankArgument reports whether the one argument given is empty once trimmed.
+func blankArgument(args []string) bool {
+	return len(args) == 1 && strings.TrimSpace(args[0]) == ""
 }

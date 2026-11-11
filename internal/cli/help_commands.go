@@ -136,7 +136,7 @@ wish-reminders/2. The spec comes exactly as stored.`,
 			},
 			{
 				name:    "spec push",
-				summary: "Upload a markdown file as a milestone's spec",
+				summary: "Upload markdown as a milestone's newest spec",
 				forms:   []string{"<project>/<n> <file> [--base <version>]"},
 				about: `<project>/<n> is a project's slug and a milestone number, such as
 wish-reminders/2. The file is stored unchanged, and cadre prints the project's
@@ -189,7 +189,8 @@ hand changes with it.`,
 					"<repo> --platform <name>",
 					"<repo> [--app-store-app <id>] [--play-package <name>]",
 				},
-				about: `<repo> is the repo's name in Cadre, such as shop-api. Setting an app again (the
+				about: `The last form is a mobile app: it needs at least one of the two store flags.
+<repo> is the repo's name in Cadre, such as shop-api. Setting an app again (the
 same name) replaces its settings, so pass --fly-app, --fly-config and
 --status-url each time, and --name when the app's name isn't its Fly app's. Fly
 apps are found through the orgs connected with cadre fly org add.
@@ -318,15 +319,17 @@ history. Adding a team again replaces its token.`,
 key ID and the issuer ID are shown there, and its .p8 file downloads once. Cadre
 asks for the file's path, or reads the file's text from stdin. The key is never
 an argument, so it stays out of your shell history. Adding a key again replaces
-it.`,
+it. A new key has a new ID, so set each app again with cadre repo set after
+adding it, then remove the old key.`,
 				flags:    []helpRow{{"--issuer <issuer-id>", "The issuer ID shown in App Store Connect. Required"}, jsonFlag},
 				examples: []string{"cadre app-store key add 2X9R4HXF34 --issuer 69a6de70-0000-47e3"},
 			},
 			{
-				name:     "app-store key remove",
-				summary:  "Disconnect an App Store Connect API key",
-				forms:    []string{"<key-id>"},
-				about:    "Refused while a repo's target still reads the key.",
+				name:    "app-store key remove",
+				summary: "Disconnect an App Store Connect API key",
+				forms:   []string{"<key-id>"},
+				about: `Refused while a repo's target still reads the key. A new key has a new ID, so
+add it, set each app again with cadre repo set, then remove the old key.`,
 				flags:    []helpRow{jsonFlag},
 				examples: []string{"cadre app-store key remove 2X9R4HXF34"},
 			},
@@ -336,7 +339,7 @@ it.`,
 				about: `Pass the service account's JSON key file: cadre asks for its path, or reads its
 text from stdin. The account is named by the file's client_email. The key is
 never an argument, so it stays out of your shell history. Adding an account
-again replaces its key.`,
+again with a new JSON key replaces the old key.`,
 				flags:    []helpRow{jsonFlag},
 				examples: []string{"cadre google-play account add < cadre-reader-key.json"},
 			},

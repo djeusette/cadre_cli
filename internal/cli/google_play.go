@@ -28,6 +28,9 @@ func runGooglePlay(env Env, asJSON bool, args []string) int {
 			return addGooglePlayAccount(ctx, s)
 		})
 	case "remove":
+		if blankArgument(rest) {
+			return usageError(env, "google-play account remove")
+		}
 		return runCommand(env, asJSON, "google-play account remove", rest, 1, func(ctx context.Context, s *session, a []string) int {
 			return removeAccount(ctx, s, "google_play", "account", strings.ToLower(strings.TrimSpace(a[0])))
 		})

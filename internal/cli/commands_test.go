@@ -3266,7 +3266,7 @@ func TestAppStoreKeyRemoveInUse(t *testing.T) {
 	if code := cli.Run([]string{"app-store", "key", "remove", "2X9R4HXF34"}, h.deps); code != 1 {
 		t.Errorf("code = %d", code)
 	}
-	if want := "2X9R4HXF34 still reads club-mobile, admin-mobile. Unset or move those targets first.\n"; h.errb.String() != want {
+	if want := "2X9R4HXF34 still reads club-mobile, admin-mobile. Add the key that replaces it, set each of those apps again with cadre repo set, then remove this one.\n"; h.errb.String() != want {
 		t.Errorf("stderr = %q", h.errb)
 	}
 }
@@ -3401,7 +3401,7 @@ func TestGooglePlayAccountRemoveInUse(t *testing.T) {
 	if code := cli.Run([]string{"google-play", "account", "remove", playEmail}, h.deps); code != 1 {
 		t.Errorf("code = %d", code)
 	}
-	if want := playEmail + " still reads club-mobile. Unset or move those targets first.\n"; h.errb.String() != want {
+	if want := playEmail + " still reads club-mobile. Add the account that replaces it, set each of those apps again with cadre repo set, then remove this one.\n"; h.errb.String() != want {
 		t.Errorf("stderr = %q", h.errb)
 	}
 }
@@ -3563,5 +3563,50 @@ func TestRepoShowMobileAppJSON(t *testing.T) {
 
 	if code := cli.Run([]string{"repo", "show", "club-mobile", "--json"}, h.deps); code != 0 || h.out.String() != body {
 		t.Errorf("code = %d, stdout = %q", code, h.out)
+	}
+}
+
+const (
+	usageAppStoreKeyAdd          = "Usage: cadre app-store key add <key-id> --issuer <issuer-id>\nRun cadre help app-store key add for details.\n"
+	usageAppStoreKeyRemove       = "Usage: cadre app-store key remove <key-id>\nRun cadre help app-store key remove for details.\n"
+	usageGooglePlayAccountRemove = "Usage: cadre google-play account remove <email>\nRun cadre help google-play account remove for details.\n"
+)
+
+func TestMobileAccountsBlankArgumentIsUsage(t *testing.T) {
+	for name, tc := range map[string]struct {
+		args  []string
+		usage string
+	}{
+		"key add":        {[]string{"app-store", "key", "add", " ", "--issuer", "iss"}, usageAppStoreKeyAdd},
+		"key remove":     {[]string{"app-store", "key", "remove", " "}, usageAppStoreKeyRemove},
+		"account remove": {[]string{"google-play", "account", "remove", " "}, usageGooglePlayAccountRemove},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got flyRequest
+			srv := flyServer(t, 200, `{}`, &got)
+			h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+			h.pipe(p8Text)
+
+			if code := cli.Run(tc.args, h.deps); code != 2 {
+				t.Errorf("code = %d", code)
+			}
+			if h.errb.String() != tc.usage || got.method != "" {
+				t.Errorf("stderr = %q, request %+v", h.errb, got)
+			}
+		})
+	}
+}
+
+func TestRepoSetMobileAppListingNoStore(t *testing.T) {
+	var got linkRequest
+	srv := linkServer(t, 200, `{"repo":"club-mobile","platform":"mobile","name":"club-mobile","settings":{},"tracked":false,"account":null,"stores":[]}`, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"repo", "set", "club-mobile", "--app-store-app", "6443635924"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	want := "Connected club-mobile to its stores.\nCadre asks each store which build is public every 15 minutes.\n"
+	if h.out.String() != want {
+		t.Errorf("stdout = %q, want %q", h.out, want)
 	}
 }

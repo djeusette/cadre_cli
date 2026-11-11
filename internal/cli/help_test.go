@@ -523,3 +523,25 @@ func TestStatusURLFlagsAreDocumentedInStep(t *testing.T) {
 		}
 	}
 }
+
+func TestHelpSaysWhatToDoWithAKeyInUse(t *testing.T) {
+	srv, _ := helpServer(t)
+	flat := func(args ...string) string {
+		return strings.Join(strings.Fields(helpFor(t, srv, args...)), " ")
+	}
+	for page, want := range map[string]string{
+		"app-store key add":       "new key has a new ID",
+		"app-store key remove":    "new key has a new ID",
+		"google-play account add": "with a new JSON key replaces the old key",
+		"repo set":                "at least one of the two",
+		"help":                    "as a milestone's newest spec",
+	} {
+		args := append([]string{"help"}, strings.Fields(page)...)
+		if page == "help" {
+			args = []string{"help"}
+		}
+		if got := flat(args...); !strings.Contains(got, want) {
+			t.Errorf("help %s lacks %q", page, want)
+		}
+	}
+}
