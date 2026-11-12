@@ -389,17 +389,26 @@ func storeLines(stores []api.TargetStore) string {
 	return b.String()
 }
 
-// publicBuildText says which build is public in a store and since when, in UTC; a build with no version shows its
-// number alone.
+// publicBuildText says which build is public in a store and since when, in UTC, then the commit it was built from
+// if cadre knows it; a build with no version shows its number alone.
 func publicBuildText(b *api.StoreBuild) string {
 	switch {
 	case b == nil:
 		return "no public build seen yet"
 	case b.Version == nil:
-		return fmt.Sprintf("%d public since %s", b.BuildNumber, b.Since.UTC().Format("Jan 2, 15:04"))
+		return fmt.Sprintf("%d public since %s%s", b.BuildNumber, b.Since.UTC().Format("Jan 2, 15:04"), commitText(b))
 	default:
-		return fmt.Sprintf("%s (%d) public since %s", oneLine(*b.Version), b.BuildNumber, b.Since.UTC().Format("Jan 2, 15:04"))
+		return fmt.Sprintf("%s (%d) public since %s%s", oneLine(*b.Version), b.BuildNumber, b.Since.UTC().Format("Jan 2, 15:04"), commitText(b))
 	}
+}
+
+// commitText is " · commit <first 7 characters>" for a build with a commit, and empty without one.
+func commitText(b *api.StoreBuild) string {
+	if b.Commit == nil || *b.Commit == "" {
+		return ""
+	}
+	commit := oneLine(*b.Commit)
+	return " · commit " + commit[:min(7, len(commit))]
 }
 
 // targetState is what show says about a target: its name if it has one, its settings as `key value` pairs sorted by

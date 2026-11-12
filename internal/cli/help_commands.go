@@ -270,7 +270,8 @@ A Vercel target starts with its name, and so does a Fly app whose name isn't its
 Fly app's. A line under the target gives its status URL, if it has one, and
 whether the app is live: live, not live since when, or not checked yet. Under a
 mobile app, a line per store gives the build that is public there and since
-when, in UTC, and the key or service account that reads it.`,
+when, in UTC, the commit it was built from when cadre knows it, and the key or
+service account that reads it.`,
 				flags:    []helpRow{jsonFlag},
 				examples: []string{"cadre repo show shop-api"},
 			},

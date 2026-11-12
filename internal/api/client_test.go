@@ -1155,3 +1155,30 @@ func TestSetTargetDecodesStores(t *testing.T) {
 		t.Errorf("third build = %+v", third.PublicBuild)
 	}
 }
+
+func TestSetTargetDecodesABuildsCommit(t *testing.T) {
+	body := `{"repo":"club-mobile","platform":"mobile","name":"club-mobile","settings":{},"tracked":false,"account":null,"stores":[` +
+		`{"store":"app_store","label":"App Store","app":"1","account":"k","public_build":{"version":"1.8.15","build_number":6188,"since":"2026-11-02T09:40:00Z","tag":"prod-v1.8.15-6188","commit":"da659a5c0ffee0123456789abcdef0123456789a"}},` +
+		`{"store":"google_play","label":"Google Play","app":"2","account":"k","public_build":{"version":"1.8.15","build_number":6188,"since":"2026-11-02T09:40:00Z","tag":null,"commit":null}},` +
+		`{"store":"other","label":"Other","app":"3","account":"k","public_build":{"version":"1.8.14","build_number":6100,"since":"2026-11-01T09:40:00Z"}}]}`
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		io.WriteString(w, body)
+	})
+
+	got, err := c.SetTarget(context.Background(), "club-mobile", "mobile", "", map[string]string{}, api.StatusURL{})
+
+	if err != nil || len(got.Stores) != 3 {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	tagged, untagged, older := got.Stores[0].PublicBuild, got.Stores[1].PublicBuild, got.Stores[2].PublicBuild
+	if tagged.Commit == nil || *tagged.Commit != "da659a5c0ffee0123456789abcdef0123456789a" {
+		t.Errorf("tagged = %+v", tagged)
+	}
+	if untagged.Commit != nil {
+		t.Errorf("untagged = %+v", untagged)
+	}
+	if older.Commit != nil {
+		t.Errorf("older = %+v", older)
+	}
+}

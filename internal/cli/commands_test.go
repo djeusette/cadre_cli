@@ -3967,3 +3967,39 @@ func TestRemovingAnAccountNeedsNoHTTPS(t *testing.T) {
 		}
 	}
 }
+
+func TestRepoShowMobileAppBuildCommit(t *testing.T) {
+	sha := "da659a5c0ffee0123456789abcdef0123456789a"
+	for name, tc := range map[string]struct {
+		build string
+		want  string
+	}{
+		"version and commit": {`{"version":"1.8.15","build_number":6188,"since":"2026-11-02T09:40:00Z","tag":"prod-v1.8.15-6188","commit":"` + sha + `"}`,
+			"    Google Play   1.8.15 (6188) public since Nov 2, 09:40 · commit da659a5 · k\n"},
+		"no version and commit": {`{"version":null,"build_number":6188,"since":"2026-11-02T09:40:00Z","tag":"prod-v1.8.15-6188","commit":"` + sha + `"}`,
+			"    Google Play   6188 public since Nov 2, 09:40 · commit da659a5 · k\n"},
+		"tag but no commit": {`{"version":"1.8.15","build_number":6188,"since":"2026-11-02T09:40:00Z","tag":"stg-v1.8.15-6188","commit":null}`,
+			"    Google Play   1.8.15 (6188) public since Nov 2, 09:40 · k\n"},
+		"older cadre, no tag or commit key": {`{"version":"1.8.15","build_number":6188,"since":"2026-11-02T09:40:00Z"}`,
+			"    Google Play   1.8.15 (6188) public since Nov 2, 09:40 · k\n"},
+		"blank commit": {`{"version":"1.8.15","build_number":6188,"since":"2026-11-02T09:40:00Z","tag":null,"commit":""}`,
+			"    Google Play   1.8.15 (6188) public since Nov 2, 09:40 · k\n"},
+		"short commit": {`{"version":"1.8.15","build_number":6188,"since":"2026-11-02T09:40:00Z","tag":null,"commit":"da6"}`,
+			"    Google Play   1.8.15 (6188) public since Nov 2, 09:40 · commit da6 · k\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got linkRequest
+			store := `{"store":"google_play","label":"Google Play","app":"a","account":"k","public_build":` + tc.build + `}`
+			body := `{"name":"club-mobile","github_full_name":"colette-club/club-mobile","targets":[{"platform":"mobile","name":"club-mobile","settings":{},"tracked":false,"account":null,"stores":[` + store + `]}]}`
+			srv := linkServer(t, 200, body, &got)
+			h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+			if code := cli.Run([]string{"repo", "show", "club-mobile"}, h.deps); code != 0 {
+				t.Fatalf("code = %d, stderr %q", code, h.errb)
+			}
+			if !strings.Contains(h.out.String(), tc.want) {
+				t.Errorf("stdout = %q, want it to hold %q", h.out, tc.want)
+			}
+		})
+	}
+}
