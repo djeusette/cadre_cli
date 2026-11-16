@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -4001,5 +4002,216 @@ func TestRepoShowMobileAppBuildCommit(t *testing.T) {
 				t.Errorf("stdout = %q, want it to hold %q", h.out, tc.want)
 			}
 		})
+	}
+}
+
+// linkClone makes a clone of colette-club/colette-api with one commit, isolated from the person's git config, and
+// returns the folder that holds it and the clone's top level.
+func linkClone(t *testing.T) (root, clone string) {
+	t.Helper()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]string{
+		"GIT_CONFIG_GLOBAL":   os.DevNull,
+		"GIT_CONFIG_SYSTEM":   os.DevNull,
+		"GIT_AUTHOR_NAME":     "t",
+		"GIT_AUTHOR_EMAIL":    "t@example.com",
+		"GIT_COMMITTER_NAME":  "t",
+		"GIT_COMMITTER_EMAIL": "t@example.com",
+	} {
+		t.Setenv(key, value)
+	}
+	origin := filepath.Join(root, "colette-club", "colette-api.git")
+	clone = filepath.Join(root, "colette-api")
+	if err := os.MkdirAll(origin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, origin, "init", "--bare", "-b", "main")
+	mustGit(t, root, "clone", origin, clone)
+	mustGit(t, clone, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(clone, "README.md"), []byte("readme"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, clone, "add", "README.md")
+	mustGit(t, clone, "commit", "-m", "README.md")
+	return root, clone
+}
+
+func mustGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := tryGit(dir, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// gitWithoutWorktreeListZ is a PATH whose git acts as one before 2.36, which has no -z for git worktree list, and
+// runs the real git for everything else.
+func gitWithoutWorktreeListZ(t *testing.T) string {
+	t.Helper()
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = worktree ]; then\n" +
+		"  echo \"error: unknown switch \\`z'\" >&2\n" +
+		"  exit 129\n" +
+		"fi\n" +
+		"exec '" + realGit + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin + string(os.PathListSeparator) + os.Getenv("PATH")
+}
+
+func checkoutBody(path string) string {
+	quoted, _ := json.Marshal(path)
+	return `{"repository":"colette-api","path":` + string(quoted) + `}`
+}
+
+func TestLinkSendsTheMainCheckout(t *testing.T) {
+	root, clone := linkClone(t)
+	worktree := filepath.Join(root, "feature")
+	mustGit(t, clone, "worktree", "add", worktree, "-b", "feature")
+	sub := filepath.Join(worktree, "lib")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(sub)
+
+	var got linkRequest
+	srv := linkServer(t, 200, checkoutBody(clone), &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"link"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if got.method != "PUT" || got.path != "/api/local-checkouts" || got.auth != "Bearer cadre_abc" {
+		t.Errorf("request = %+v", got)
+	}
+	sent, _ := got.body["path"].(string)
+	if resolved, err := filepath.EvalSymlinks(sent); err != nil || resolved != clone {
+		t.Errorf("path = %q, want %q", sent, clone)
+	}
+	if len(got.body) != 2 || got.body["github_full_name"] != "colette-club/colette-api" {
+		t.Errorf("body = %v", got.body)
+	}
+	if want := "Linked colette-api to " + clone + ". Its Deploy button in cadre opens there.\n"; h.out.String() != want {
+		t.Errorf("stdout = %q, want %q", h.out, want)
+	}
+	if h.errb.Len() != 0 {
+		t.Errorf("stderr = %q", h.errb)
+	}
+}
+
+func TestLinkJSON(t *testing.T) {
+	_, clone := linkClone(t)
+	t.Chdir(clone)
+	body := checkoutBody(clone)
+	var got linkRequest
+	srv := linkServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"link", "--json"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if h.out.String() != body {
+		t.Errorf("stdout = %q, want %q", h.out, body)
+	}
+}
+
+func TestLinkErrors(t *testing.T) {
+	unauthorized := func(server string) string {
+		return "Your key for " + server + " is no longer valid. Run cadre login --url " + server + ".\n"
+	}
+	notACheckout := func(string) string {
+		return "This folder isn't a checkout with an origin. Run cadre link in one.\n"
+	}
+	cases := []struct {
+		name   string
+		fault  func(t *testing.T, clone string)
+		status int
+		body   string
+		calls  int
+		want   func(server string) string
+	}{
+		{"outside a checkout", func(t *testing.T, _ string) { t.Chdir(t.TempDir()) }, 200, `{}`, 0, notACheckout},
+		{"no origin", func(t *testing.T, clone string) { mustGit(t, clone, "remote", "remove", "origin") }, 200, `{}`, 0, notACheckout},
+		{"no git", func(t *testing.T, _ string) { t.Setenv("PATH", t.TempDir()) }, 200, `{}`, 0, func(string) string {
+			return "exec: \"git\": executable file not found in $PATH\n"
+		}},
+		{"unknown repo", nil, 404, `{"error":"repository_not_found"}`, 1, func(string) string {
+			return "cadre doesn't know colette-club/colette-api. A project names a repo before cadre knows it.\n"
+		}},
+		{"bad key", nil, 401, `{"error":"unauthorized"}`, 1, unauthorized},
+		{"a cadre without the endpoint", nil, 404, `{"errors":{"detail":"Not Found"}}`, 1, func(server string) string {
+			return "Could not complete the request to " + server + ": the server answered with an unexpected status 404\n"
+		}},
+		{"git without worktree list -z", func(t *testing.T, _ string) { t.Setenv("PATH", gitWithoutWorktreeListZ(t)) }, 200, `{}`, 0, func(string) string {
+			return "error: unknown switch `z'\n"
+		}},
+		{"bad path", nil, 422, `{"errors":[{"path":"path","message":"must be an absolute folder"}]}`, 1, func(string) string {
+			return "path: must be an absolute folder\n"
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, clone := linkClone(t)
+			t.Chdir(clone)
+			if tc.fault != nil {
+				tc.fault(t, clone)
+			}
+			var got linkRequest
+			srv := linkServer(t, tc.status, tc.body, &got)
+			h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+			if code := cli.Run([]string{"link"}, h.deps); code != 1 {
+				t.Errorf("code = %d", code)
+			}
+			if want := tc.want(srv.URL); h.errb.String() != want {
+				t.Errorf("stderr = %q, want %q", h.errb, want)
+			}
+			if h.out.Len() != 0 {
+				t.Errorf("stdout = %q", h.out)
+			}
+			if got.calls != tc.calls {
+				t.Errorf("server calls = %d, want %d", got.calls, tc.calls)
+			}
+		})
+	}
+}
+
+func TestLinkNotSignedIn(t *testing.T) {
+	_, clone := linkClone(t)
+	t.Chdir(clone)
+	var got linkRequest
+	srv := linkServer(t, 200, checkoutBody(clone), &got)
+	h := newHarness(t, srv, nil)
+
+	if code := cli.Run([]string{"link"}, h.deps); code != 1 || h.errb.String() != "Not signed in. Run cadre login --url <url>.\n" {
+		t.Errorf("code = %d, stderr %q", code, h.errb)
+	}
+	if got.calls != 0 {
+		t.Errorf("the server was called: %+v", got)
+	}
+}
+
+func TestLinkTakesNoArguments(t *testing.T) {
+	_, clone := linkClone(t)
+	t.Chdir(clone)
+	var got linkRequest
+	srv := linkServer(t, 200, checkoutBody(clone), &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"link", "extra"}, h.deps); code != 2 || h.errb.String() != usageLink {
+		t.Errorf("code = %d, stderr %q", code, h.errb)
+	}
+	if got.calls != 0 {
+		t.Errorf("the server was called: %+v", got)
 	}
 }

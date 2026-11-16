@@ -56,6 +56,8 @@ func Run(args []string, env Env) int {
 		return runAppStore(env, asJSON, args[1:])
 	case "google-play":
 		return runGooglePlay(env, asJSON, args[1:])
+	case "link":
+		return runCommand(env, asJSON, "link", args[1:], 0, runCheckoutLink)
 	case "deploy":
 		return runDeploy(env, asJSON, args[1:])
 	case "upgrade":

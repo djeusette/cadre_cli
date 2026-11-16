@@ -568,3 +568,161 @@ func TestContainsWhenGitFails(t *testing.T) {
 		t.Errorf("Contains = (%v, %v), want (false, an error)", got, err)
 	}
 }
+
+// sameDir fails unless got and want are the same folder once links are resolved, as the temp folder is one on macOS.
+func sameDir(t *testing.T, got, want string) {
+	t.Helper()
+	resolvedGot, err := filepath.EvalSymlinks(got)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", got, err)
+	}
+	resolvedWant, err := filepath.EvalSymlinks(want)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", want, err)
+	}
+	if resolvedGot != resolvedWant {
+		t.Errorf("Main = %q, want %q", got, want)
+	}
+}
+
+func TestMainFromTheCheckout(t *testing.T) {
+	_, work := clone(t)
+	got, err := open(t, work).Main(context.Background())
+	if err != nil {
+		t.Fatalf("Main: %v", err)
+	}
+	sameDir(t, got, work)
+}
+
+func TestMainFromASubfolder(t *testing.T) {
+	_, work := clone(t)
+	sub := filepath.Join(work, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := open(t, sub).Main(context.Background())
+	if err != nil {
+		t.Fatalf("Main: %v", err)
+	}
+	sameDir(t, got, work)
+}
+
+func TestMainFromALinkedWorktree(t *testing.T) {
+	_, work := clone(t)
+	run(t, work, "worktree", "add", "../feature", "-b", "feature")
+	feature := filepath.Join(filepath.Dir(work), "feature")
+	c := open(t, feature)
+	sameDir(t, c.Dir, feature)
+	got, err := c.Main(context.Background())
+	if err != nil {
+		t.Fatalf("Main: %v", err)
+	}
+	sameDir(t, got, work)
+}
+
+func TestMainWithSpacesInThePath(t *testing.T) {
+	origin, _ := clone(t)
+	work := filepath.Join(t.TempDir(), "My Code", "colette-api")
+	run(t, filepath.Dir(origin), "clone", origin, work)
+	got, err := open(t, work).Main(context.Background())
+	if err != nil {
+		t.Fatalf("Main: %v", err)
+	}
+	sameDir(t, got, work)
+}
+
+func TestMainFromAWorktreeOfABareRepository(t *testing.T) {
+	origin, _ := clone(t)
+	feature := filepath.Join(filepath.Dir(origin), "feature")
+	run(t, origin, "worktree", "add", feature, "-b", "feature")
+	got, err := open(t, feature).Main(context.Background())
+	if err != nil {
+		t.Fatalf("Main: %v", err)
+	}
+	sameDir(t, got, feature)
+}
+
+// Main runs on a checkout Open found, so a failure of git there is git's own error, never ErrNotACheckout.
+func TestMainWhenGitFails(t *testing.T) {
+	got, err := git.Checkout{Dir: outside(t)}.Main(context.Background())
+	if got != "" || err == nil || errors.Is(err, git.ErrNotACheckout) {
+		t.Errorf("Main = (%q, %v), want git's own error", got, err)
+	}
+}
+
+// oldGit is git before 2.36, which has no -z for git worktree list. Everything else runs the real git.
+const oldGit = `#!/bin/sh
+if [ "$1" = worktree ]; then
+  echo "error: unknown switch \` + "`" + `z'" >&2
+  exit 129
+fi
+exec '%[1]s' "$@"
+`
+
+func TestMainOnAGitWithoutWorktreeListZ(t *testing.T) {
+	_, work := clone(t)
+	c := open(t, work)
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "git"), fmt.Sprintf(oldGit, realGit))
+	if err := os.Chmod(filepath.Join(bin, "git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	_, err = c.Main(context.Background())
+	if err == nil || errors.Is(err, git.ErrNotACheckout) || err.Error() != "error: unknown switch `z'" {
+		t.Errorf("err = %v, want git's own error", err)
+	}
+}
+
+// worktreeListGit prints what it is given for git worktree list and runs the real git for everything else.
+const worktreeListGit = `#!/bin/sh
+if [ "$1" = worktree ]; then
+  printf '%%s' '%[2]s'
+  exit 0
+fi
+exec '%[1]s' "$@"
+`
+
+// git ends every worktree with an empty field, so output without one names no worktree Main can trust.
+func TestMainWhenGitPrintsNoWorktree(t *testing.T) {
+	for name, printed := range map[string]string{
+		"nothing":         "",
+		"an unended list": "worktree /tmp/colette-api",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, work := clone(t)
+			c := open(t, work)
+			realGit, err := exec.LookPath("git")
+			if err != nil {
+				t.Fatal(err)
+			}
+			bin := t.TempDir()
+			write(t, filepath.Join(bin, "git"), fmt.Sprintf(worktreeListGit, realGit, printed))
+			if err := os.Chmod(filepath.Join(bin, "git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			got, err := c.Main(context.Background())
+			if got != "" || err == nil || err.Error() != "git worktree list printed no worktree" {
+				t.Errorf("Main = (%q, %v), want git worktree list printed no worktree", got, err)
+			}
+		})
+	}
+}
+
+func TestMainWithANewlineInThePath(t *testing.T) {
+	origin, _ := clone(t)
+	work := filepath.Join(t.TempDir(), "colette\napi")
+	run(t, filepath.Dir(origin), "clone", origin, work)
+	got, err := open(t, work).Main(context.Background())
+	if err != nil {
+		t.Fatalf("Main: %v", err)
+	}
+	sameDir(t, got, work)
+}

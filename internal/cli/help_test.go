@@ -34,6 +34,7 @@ const (
 	usageFlyOrgRemove     = "Usage: cadre fly org remove <org>\nRun cadre help fly org remove for details.\n"
 	usageVercelTeamAdd    = "Usage: cadre vercel team add <team>\nRun cadre help vercel team add for details.\n"
 	usageVercelTeamRemove = "Usage: cadre vercel team remove <team>\nRun cadre help vercel team remove for details.\n"
+	usageLink             = "Usage: cadre link\nRun cadre help link for details.\n"
 	usageUpgrade          = "Usage: cadre upgrade\nRun cadre help upgrade for details.\n"
 )
 
@@ -44,7 +45,7 @@ var (
 		"project create", "project pull", "project update", "project archive", "project unarchive",
 		"spec pull", "spec push", "pr link", "repo set", "repo unset", "repo show",
 		"fly org add", "fly org remove", "vercel team add", "vercel team remove",
-		"app-store key add", "app-store key remove", "google-play account add", "google-play account remove", "deploy", "upgrade", "version", "help",
+		"app-store key add", "app-store key remove", "google-play account add", "google-play account remove", "link", "deploy", "upgrade", "version", "help",
 	}
 	everyGroup = map[string][]string{
 		"project":             {"create", "pull", "update", "archive", "unarchive"},
@@ -162,6 +163,7 @@ func TestHelpFlagNeverRunsTheCommand(t *testing.T) {
 		{"spec", "pull", "-h", "wish-reminders/2"},
 		{"pr", "link", prURL, "--none", "--help"},
 		{"repo", "show", "--help"},
+		{"link", "--help"},
 		{"deploy", "--help"},
 		{"deploy", "colette-api", "--yes", "-h"},
 		{"repo", "set", "shop-api", "--fly-app", "shop-api-prod", "-h"},
@@ -466,6 +468,7 @@ func TestWrongArgumentsPrintThatCommandsUsage(t *testing.T) {
 		{[]string{"repo", "set"}, usageRepoSet},
 		{[]string{"repo", "unset"}, usageRepoUnset},
 		{[]string{"repo", "show"}, usageRepoShow},
+		{[]string{"link", "extra"}, usageLink},
 		{[]string{"deploy"}, usageDeploy},
 		{[]string{"deploy", "colette-api", "shop-api"}, usageDeploy},
 		{[]string{"fly", "org", "add"}, usageFlyOrgAdd},

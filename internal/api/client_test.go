@@ -52,6 +52,10 @@ func TestEveryCallMapsTooManyRequests(t *testing.T) {
 			_, err := c.LinkPullRequest(ctx, "https://github.com/colette-club/colette-api/pull/418", nil, "")
 			return err
 		},
+		"link checkout": func(c *api.Client) error {
+			_, err := c.LinkCheckout(ctx, "colette-club/colette-api", "/Users/ada/Code/colette-api")
+			return err
+		},
 		"show repository": func(c *api.Client) error { _, err := c.ShowRepository(ctx, "colette-api"); return err },
 		"set target": func(c *api.Client) error {
 			_, err := c.SetTarget(ctx, "colette-api", "fly", "", map[string]string{"app": "colette-api-prod"}, api.StatusURL{})
@@ -509,6 +513,57 @@ func TestLinkPullRequestStatuses(t *testing.T) {
 	for _, tc := range cases {
 		c := newClient(t, reply(tc.status, tc.body))
 		if _, err := c.LinkPullRequest(context.Background(), "https://github.com/colette-club/colette-api/pull/418", nil, ""); !tc.check(err) {
+			t.Errorf("%d %s: err = %v", tc.status, tc.body, err)
+		}
+	}
+}
+
+const linkedCheckoutJSON = `{"repository":"colette-api","path":"/Users/ada/Code/colette-api"}`
+
+func TestLinkCheckout(t *testing.T) {
+	c := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		if err := json.Unmarshal(b, &body); err != nil || len(body) != 2 ||
+			body["github_full_name"] != "colette-club/colette-api" || body["path"] != "/Users/ada/Code/colette-api" {
+			t.Errorf("body = %s (%v)", b, err)
+		}
+		if r.Method != http.MethodPut || r.URL.EscapedPath() != "/api/local-checkouts" || r.Header.Get("Authorization") != "Bearer cadre_secret" {
+			t.Errorf("bad request: %s %s %v", r.Method, r.URL.EscapedPath(), r.Header)
+		}
+		w.WriteHeader(200)
+		io.WriteString(w, linkedCheckoutJSON)
+	})
+
+	got, err := c.LinkCheckout(context.Background(), "colette-club/colette-api", "/Users/ada/Code/colette-api")
+
+	if err != nil || got.Repository != "colette-api" || got.Path != "/Users/ada/Code/colette-api" {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if string(got.Raw) != linkedCheckoutJSON {
+		t.Errorf("raw = %s", got.Raw)
+	}
+}
+
+func TestLinkCheckoutStatuses(t *testing.T) {
+	cases := []struct {
+		status int
+		body   string
+		check  func(error) bool
+	}{
+		{404, `{"error":"repository_not_found"}`, func(err error) bool { return errors.Is(err, api.ErrRepositoryNotFound) }},
+		{404, `{"error":"not_found"}`, func(err error) bool { var serr *api.StatusError; return errors.As(err, &serr) && serr.Status == 404 }},
+		{401, `{"error":"unauthorized"}`, func(err error) bool { return errors.Is(err, api.ErrUnauthorized) }},
+		{422, `{"errors":[{"path":"path","message":"must be an absolute folder"}]}`, func(err error) bool {
+			var verr *api.ValidationError
+			return errors.As(err, &verr) && len(verr.Errors) == 1 && verr.Errors[0] == (api.FieldError{Path: "path", Message: "must be an absolute folder"})
+		}},
+		{500, `oops`, func(err error) bool { var serr *api.StatusError; return errors.As(err, &serr) && serr.Status == 500 }},
+		{200, `oops`, func(err error) bool { return err != nil && strings.Contains(err.Error(), "status 200") }},
+	}
+	for _, tc := range cases {
+		c := newClient(t, reply(tc.status, tc.body))
+		if _, err := c.LinkCheckout(context.Background(), "colette-club/colette-api", "/Users/ada/Code/colette-api"); !tc.check(err) {
 			t.Errorf("%d %s: err = %v", tc.status, tc.body, err)
 		}
 	}
