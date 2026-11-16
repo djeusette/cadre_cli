@@ -42,11 +42,15 @@ func (c Checkout) Repository(ctx context.Context) (string, error) {
 	return repository, nil
 }
 
-// Main is the main worktree's top level, which is the checkout itself unless it is a linked worktree. git lists the main
-// worktree first. A bare repository has no files of its own, so a worktree of one is its own main checkout. -z ends
-// each field with a NUL and each worktree with an empty field, so a folder name holding a newline stays whole. It runs
-// on a checkout Open found, so a failure is git's own error, never ErrNotACheckout: git before 2.36 has no -z here.
+// errNoWorktree means git worktree list printed no complete worktree.
+var errNoWorktree = errors.New("git worktree list printed no worktree")
+
+// Main is the main worktree's top level, which is the checkout itself unless it is a linked worktree. In a worktree of a
+// bare repository it is c.Dir. When git fails it returns git's own error, never ErrNotACheckout.
 func (c Checkout) Main(ctx context.Context) (string, error) {
+	// git lists the main worktree first. -z ends each field with a NUL and each worktree with an empty field, so a folder
+	// name holding a newline stays whole. git before 2.36 has no -z here and fails. A bare repository has no files of
+	// its own, so a worktree of one is its own main checkout.
 	out, err := run(ctx, c.Dir, "worktree", "list", "--porcelain", "-z")
 	if err != nil {
 		return "", err
@@ -54,7 +58,7 @@ func (c Checkout) Main(ctx context.Context) (string, error) {
 	fields := strings.Split(out, "\x00")
 	dir, ok := strings.CutPrefix(fields[0], "worktree ")
 	if !ok {
-		return "", errors.New("git worktree list printed no worktree")
+		return "", errNoWorktree
 	}
 	for _, field := range fields[1:] {
 		switch field {
@@ -64,7 +68,7 @@ func (c Checkout) Main(ctx context.Context) (string, error) {
 			return c.Dir, nil
 		}
 	}
-	return dir, nil
+	return "", errNoWorktree
 }
 
 // Branch is the current branch, or "" on a detached HEAD.

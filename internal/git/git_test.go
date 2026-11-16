@@ -644,9 +644,9 @@ func TestMainFromAWorktreeOfABareRepository(t *testing.T) {
 
 // Main runs on a checkout Open found, so a failure of git there is git's own error, never ErrNotACheckout.
 func TestMainWhenGitFails(t *testing.T) {
-	_, err := git.Checkout{Dir: outside(t)}.Main(context.Background())
-	if err == nil || errors.Is(err, git.ErrNotACheckout) || !strings.Contains(err.Error(), "not a git repository") {
-		t.Errorf("err = %v, want git's own error", err)
+	got, err := git.Checkout{Dir: outside(t)}.Main(context.Background())
+	if got != "" || err == nil || errors.Is(err, git.ErrNotACheckout) {
+		t.Errorf("Main = (%q, %v), want git's own error", got, err)
 	}
 }
 
@@ -676,6 +676,43 @@ func TestMainOnAGitWithoutWorktreeListZ(t *testing.T) {
 	_, err = c.Main(context.Background())
 	if err == nil || errors.Is(err, git.ErrNotACheckout) || err.Error() != "error: unknown switch `z'" {
 		t.Errorf("err = %v, want git's own error", err)
+	}
+}
+
+// worktreeListGit prints what it is given for git worktree list and runs the real git for everything else.
+const worktreeListGit = `#!/bin/sh
+if [ "$1" = worktree ]; then
+  printf '%%s' '%[2]s'
+  exit 0
+fi
+exec '%[1]s' "$@"
+`
+
+// git ends every worktree with an empty field, so output without one names no worktree Main can trust.
+func TestMainWhenGitPrintsNoWorktree(t *testing.T) {
+	for name, printed := range map[string]string{
+		"nothing":         "",
+		"an unended list": "worktree /tmp/colette-api",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, work := clone(t)
+			c := open(t, work)
+			realGit, err := exec.LookPath("git")
+			if err != nil {
+				t.Fatal(err)
+			}
+			bin := t.TempDir()
+			write(t, filepath.Join(bin, "git"), fmt.Sprintf(worktreeListGit, realGit, printed))
+			if err := os.Chmod(filepath.Join(bin, "git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			got, err := c.Main(context.Background())
+			if got != "" || err == nil || err.Error() != "git worktree list printed no worktree" {
+				t.Errorf("Main = (%q, %v), want git worktree list printed no worktree", got, err)
+			}
+		})
 	}
 }
 
