@@ -4120,6 +4120,9 @@ func TestLinkErrors(t *testing.T) {
 	}{
 		{"outside a checkout", func(t *testing.T, _ string) { t.Chdir(t.TempDir()) }, 200, `{}`, 0, notACheckout},
 		{"no origin", func(t *testing.T, clone string) { mustGit(t, clone, "remote", "remove", "origin") }, 200, `{}`, 0, notACheckout},
+		{"no git", func(t *testing.T, _ string) { t.Setenv("PATH", t.TempDir()) }, 200, `{}`, 0, func(string) string {
+			return "exec: \"git\": executable file not found in $PATH\n"
+		}},
 		{"unknown repo", nil, 404, `{"error":"repository_not_found"}`, 1, func(string) string {
 			return "cadre doesn't know colette-club/colette-api. A project names a repo before cadre knows it.\n"
 		}},
