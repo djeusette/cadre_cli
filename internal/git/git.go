@@ -46,7 +46,8 @@ func (c Checkout) Repository(ctx context.Context) (string, error) {
 var errNoWorktree = errors.New("git worktree list printed no worktree")
 
 // Main is the main worktree's top level, which is the checkout itself unless it is a linked worktree. In a worktree of a
-// bare repository it is c.Dir. When git fails it returns git's own error, never ErrNotACheckout.
+// bare repository it is c.Dir. When git fails it returns git's own error, never ErrNotACheckout. When git prints no
+// complete worktree it returns an error saying so.
 func (c Checkout) Main(ctx context.Context) (string, error) {
 	// git lists the main worktree first. -z ends each field with a NUL and each worktree with an empty field, so a folder
 	// name holding a newline stays whole. git before 2.36 has no -z here and fails. A bare repository has no files of
