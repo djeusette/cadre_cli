@@ -44,16 +44,17 @@ func (c Checkout) Repository(ctx context.Context) (string, error) {
 
 // Main is the main worktree's top level, which is the checkout itself unless it is a linked worktree. git lists the main
 // worktree first. A bare repository has no files of its own, so a worktree of one is its own main checkout. -z ends
-// each field with a NUL and each worktree with an empty field, so a folder name holding a newline stays whole.
+// each field with a NUL and each worktree with an empty field, so a folder name holding a newline stays whole. It runs
+// on a checkout Open found, so a failure is git's own error, never ErrNotACheckout: git before 2.36 has no -z here.
 func (c Checkout) Main(ctx context.Context) (string, error) {
 	out, err := run(ctx, c.Dir, "worktree", "list", "--porcelain", "-z")
 	if err != nil {
-		return "", notACheckout(err)
+		return "", err
 	}
 	fields := strings.Split(out, "\x00")
 	dir, ok := strings.CutPrefix(fields[0], "worktree ")
 	if !ok {
-		return "", fmt.Errorf("%w: git worktree list printed no worktree", ErrNotACheckout)
+		return "", errors.New("git worktree list printed no worktree")
 	}
 	for _, field := range fields[1:] {
 		switch field {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -4047,6 +4048,27 @@ func mustGit(t *testing.T, dir string, args ...string) string {
 	return out
 }
 
+// gitWithoutWorktreeListZ is a PATH whose git acts as one before 2.36, which has no -z for git worktree list, and
+// runs the real git for everything else.
+func gitWithoutWorktreeListZ(t *testing.T) string {
+	t.Helper()
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = worktree ]; then\n" +
+		"  echo \"error: unknown switch \\`z'\" >&2\n" +
+		"  exit 129\n" +
+		"fi\n" +
+		"exec '" + realGit + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin + string(os.PathListSeparator) + os.Getenv("PATH")
+}
+
 func checkoutBody(path string) string {
 	quoted, _ := json.Marshal(path)
 	return `{"repository":"colette-api","path":` + string(quoted) + `}`
@@ -4127,8 +4149,11 @@ func TestLinkErrors(t *testing.T) {
 			return "cadre doesn't know colette-club/colette-api. A project names a repo before cadre knows it.\n"
 		}},
 		{"bad key", nil, 401, `{"error":"unauthorized"}`, 1, unauthorized},
-		{"bad path", nil, 422, `{"errors":[{"path":"path","message":"must be absolute"}]}`, 1, func(string) string {
-			return "path: must be absolute\n"
+		{"git without worktree list -z", func(t *testing.T, _ string) { t.Setenv("PATH", gitWithoutWorktreeListZ(t)) }, 200, `{}`, 0, func(string) string {
+			return "error: unknown switch `z'\n"
+		}},
+		{"bad path", nil, 422, `{"errors":[{"path":"path","message":"must be an absolute folder"}]}`, 1, func(string) string {
+			return "path: must be an absolute folder\n"
 		}},
 	}
 	for _, tc := range cases {

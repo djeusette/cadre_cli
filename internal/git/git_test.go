@@ -642,10 +642,40 @@ func TestMainFromAWorktreeOfABareRepository(t *testing.T) {
 	sameDir(t, got, feature)
 }
 
-func TestMainOutsideACheckout(t *testing.T) {
+// Main runs on a checkout Open found, so a failure of git there is git's own error, never ErrNotACheckout.
+func TestMainWhenGitFails(t *testing.T) {
 	_, err := git.Checkout{Dir: outside(t)}.Main(context.Background())
-	if !errors.Is(err, git.ErrNotACheckout) {
-		t.Errorf("err = %v, want ErrNotACheckout", err)
+	if err == nil || errors.Is(err, git.ErrNotACheckout) || !strings.Contains(err.Error(), "not a git repository") {
+		t.Errorf("err = %v, want git's own error", err)
+	}
+}
+
+// oldGit is git before 2.36, which has no -z for git worktree list. Everything else runs the real git.
+const oldGit = `#!/bin/sh
+if [ "$1" = worktree ]; then
+  echo "error: unknown switch \` + "`" + `z'" >&2
+  exit 129
+fi
+exec '%[1]s' "$@"
+`
+
+func TestMainOnAGitWithoutWorktreeListZ(t *testing.T) {
+	_, work := clone(t)
+	c := open(t, work)
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "git"), fmt.Sprintf(oldGit, realGit))
+	if err := os.Chmod(filepath.Join(bin, "git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	_, err = c.Main(context.Background())
+	if err == nil || errors.Is(err, git.ErrNotACheckout) || err.Error() != "error: unknown switch `z'" {
+		t.Errorf("err = %v, want git's own error", err)
 	}
 }
 
