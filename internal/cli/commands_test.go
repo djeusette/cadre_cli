@@ -4149,6 +4149,9 @@ func TestLinkErrors(t *testing.T) {
 			return "cadre doesn't know colette-club/colette-api. A project names a repo before cadre knows it.\n"
 		}},
 		{"bad key", nil, 401, `{"error":"unauthorized"}`, 1, unauthorized},
+		{"a cadre without the endpoint", nil, 404, `{"errors":{"detail":"Not Found"}}`, 1, func(server string) string {
+			return "Could not complete the request to " + server + ": the server answered with an unexpected status 404\n"
+		}},
 		{"git without worktree list -z", func(t *testing.T, _ string) { t.Setenv("PATH", gitWithoutWorktreeListZ(t)) }, 200, `{}`, 0, func(string) string {
 			return "error: unknown switch `z'\n"
 		}},
@@ -4180,6 +4183,21 @@ func TestLinkErrors(t *testing.T) {
 				t.Errorf("server calls = %d, want %d", got.calls, tc.calls)
 			}
 		})
+	}
+}
+
+func TestLinkNotSignedIn(t *testing.T) {
+	_, clone := linkClone(t)
+	t.Chdir(clone)
+	var got linkRequest
+	srv := linkServer(t, 200, checkoutBody(clone), &got)
+	h := newHarness(t, srv, nil)
+
+	if code := cli.Run([]string{"link"}, h.deps); code != 1 || h.errb.String() != "Not signed in. Run cadre login --url <url>.\n" {
+		t.Errorf("code = %d, stderr %q", code, h.errb)
+	}
+	if got.calls != 0 {
+		t.Errorf("the server was called: %+v", got)
 	}
 }
 

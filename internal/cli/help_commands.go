@@ -361,8 +361,9 @@ only, or to a loopback address.`,
 				about: `Remembers this checkout's folder, so the repo's Deploy button in cadre opens
 Claude Desktop there. Run it anywhere in a checkout of a repo cadre knows: its
 origin names the repo. It stores the main checkout's folder, even when run from
-a linked worktree or a subfolder. Running it again replaces the folder. A repo
-cadre doesn't know is refused.`,
+a linked worktree or a subfolder. In a worktree of a bare repository, it stores
+that worktree itself. Running it again replaces the folder. A repo cadre doesn't
+know is refused.`,
 				flags:    []helpRow{jsonFlag},
 				examples: []string{"cd ~/Code/shop-api && cadre link"},
 			},
