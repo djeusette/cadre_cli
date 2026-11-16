@@ -42,6 +42,27 @@ func (c Checkout) Repository(ctx context.Context) (string, error) {
 	return repository, nil
 }
 
+// Main is the main worktree's top level, which is the checkout itself unless it is a linked worktree. git lists the main
+// worktree first. A bare repository has no files of its own, so a worktree of one is its own main checkout.
+func (c Checkout) Main(ctx context.Context) (string, error) {
+	out, err := run(ctx, c.Dir, "worktree", "list", "--porcelain")
+	if err != nil {
+		return "", notACheckout(err)
+	}
+	first, _, _ := strings.Cut(out, "\n\n")
+	dir, ok := strings.CutPrefix(first, "worktree ")
+	if !ok {
+		return "", fmt.Errorf("%w: git worktree list printed no worktree", ErrNotACheckout)
+	}
+	dir, attributes, _ := strings.Cut(dir, "\n")
+	for attribute := range strings.Lines(attributes) {
+		if strings.TrimSpace(attribute) == "bare" {
+			return c.Dir, nil
+		}
+	}
+	return dir, nil
+}
+
 // Branch is the current branch, or "" on a detached HEAD.
 func (c Checkout) Branch(ctx context.Context) (string, error) {
 	return run(ctx, c.Dir, "branch", "--show-current")

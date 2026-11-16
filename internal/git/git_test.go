@@ -568,3 +568,83 @@ func TestContainsWhenGitFails(t *testing.T) {
 		t.Errorf("Contains = (%v, %v), want (false, an error)", got, err)
 	}
 }
+
+// sameDir fails unless got and want are the same folder once links are resolved, as the temp folder is one on macOS.
+func sameDir(t *testing.T, got, want string) {
+	t.Helper()
+	resolvedGot, err := filepath.EvalSymlinks(got)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", got, err)
+	}
+	resolvedWant, err := filepath.EvalSymlinks(want)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", want, err)
+	}
+	if resolvedGot != resolvedWant {
+		t.Errorf("Main = %q, want %q", got, want)
+	}
+}
+
+func TestMainFromTheCheckout(t *testing.T) {
+	_, work := clone(t)
+	got, err := open(t, work).Main(context.Background())
+	if err != nil {
+		t.Fatalf("Main: %v", err)
+	}
+	sameDir(t, got, work)
+}
+
+func TestMainFromASubfolder(t *testing.T) {
+	_, work := clone(t)
+	sub := filepath.Join(work, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := open(t, sub).Main(context.Background())
+	if err != nil {
+		t.Fatalf("Main: %v", err)
+	}
+	sameDir(t, got, work)
+}
+
+func TestMainFromALinkedWorktree(t *testing.T) {
+	_, work := clone(t)
+	run(t, work, "worktree", "add", "../feature", "-b", "feature")
+	feature := filepath.Join(filepath.Dir(work), "feature")
+	c := open(t, feature)
+	sameDir(t, c.Dir, feature)
+	got, err := c.Main(context.Background())
+	if err != nil {
+		t.Fatalf("Main: %v", err)
+	}
+	sameDir(t, got, work)
+}
+
+func TestMainWithSpacesInThePath(t *testing.T) {
+	origin, _ := clone(t)
+	work := filepath.Join(t.TempDir(), "My Code", "colette-api")
+	run(t, filepath.Dir(origin), "clone", origin, work)
+	got, err := open(t, work).Main(context.Background())
+	if err != nil {
+		t.Fatalf("Main: %v", err)
+	}
+	sameDir(t, got, work)
+}
+
+func TestMainFromAWorktreeOfABareRepository(t *testing.T) {
+	origin, _ := clone(t)
+	feature := filepath.Join(filepath.Dir(origin), "feature")
+	run(t, origin, "worktree", "add", feature, "-b", "feature")
+	got, err := open(t, feature).Main(context.Background())
+	if err != nil {
+		t.Fatalf("Main: %v", err)
+	}
+	sameDir(t, got, feature)
+}
+
+func TestMainOutsideACheckout(t *testing.T) {
+	_, err := git.Checkout{Dir: outside(t)}.Main(context.Background())
+	if !errors.Is(err, git.ErrNotACheckout) {
+		t.Errorf("err = %v, want ErrNotACheckout", err)
+	}
+}
