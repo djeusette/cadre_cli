@@ -648,3 +648,14 @@ func TestMainOutsideACheckout(t *testing.T) {
 		t.Errorf("err = %v, want ErrNotACheckout", err)
 	}
 }
+
+func TestMainWithANewlineInThePath(t *testing.T) {
+	origin, _ := clone(t)
+	work := filepath.Join(t.TempDir(), "colette\napi")
+	run(t, filepath.Dir(origin), "clone", origin, work)
+	got, err := open(t, work).Main(context.Background())
+	if err != nil {
+		t.Fatalf("Main: %v", err)
+	}
+	sameDir(t, got, work)
+}
