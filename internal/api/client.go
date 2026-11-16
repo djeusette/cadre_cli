@@ -489,6 +489,39 @@ func linkNotFound(status int, body []byte) error {
 	return &StatusError{Status: status}
 }
 
+// LinkedCheckout is a repo's checkout after a link: the repo's name in cadre and the folder it is checked out in.
+// Raw holds the response body as received.
+type LinkedCheckout struct {
+	Repository string `json:"repository"`
+	Path       string `json:"path"`
+	Raw        []byte `json:"-"`
+}
+
+// LinkCheckout tells the server that the repo named githubFullName, written <owner>/<name>, is checked out at path, an
+// absolute folder. It returns ErrRepositoryNotFound, ErrUnauthorized or a *ValidationError when the server refuses it.
+func (c *Client) LinkCheckout(ctx context.Context, githubFullName, path string) (LinkedCheckout, error) {
+	var linked LinkedCheckout
+	payload, err := json.Marshal(checkoutBody{GitHubFullName: githubFullName, Path: path})
+	if err != nil {
+		return linked, err
+	}
+	status, resp, err := c.do(ctx, http.MethodPut, "/api/local-checkouts", payload)
+	if err != nil {
+		return linked, err
+	}
+	if status != http.StatusOK {
+		return linked, repositoryStatusError(status, resp)
+	}
+	linked.Raw = resp
+	return linked, c.decode(status, resp, &linked)
+}
+
+// checkoutBody is a link checkout call's JSON body.
+type checkoutBody struct {
+	GitHubFullName string `json:"github_full_name"`
+	Path           string `json:"path"`
+}
+
 // Repository is a repo with its deploy targets. Raw holds the response body as received.
 type Repository struct {
 	Name           string   `json:"name"`
