@@ -394,3 +394,66 @@ func TestStatusRefusedKeyAndServerError(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusPadsQueueNamesByCharactersNotBytes(t *testing.T) {
+	var got statusRequest
+	body := `{"can_deploy":[
+	  {"name":"café","ships":[{"number":1,"url":"u","project":null,"slug":null,"milestone":null,"held":false,"blocked_by":null}],
+	   "unblocks":[],"last_deployed_at":null},
+	  {"name":"api","ships":[{"number":2,"url":"u","project":null,"slug":null,"milestone":null,"held":false,"blocked_by":null}],
+	   "unblocks":[],"last_deployed_at":null}],
+	  "nothing_to_ship":[],"not_tracked":[],"projects":[]}`
+	srv := statusServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"status"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	want := "Can deploy now\n" +
+		"  café   ships #1 not linked\n" +
+		"  api    ships #2 not linked\n" +
+		"\nProjects (0 active)\n"
+	if h.out.String() != want {
+		t.Errorf("stdout = %q\nwant     %q", h.out, want)
+	}
+}
+
+func TestStatusAPRWithOnlyOneOfProjectAndMilestoneIsNotLinked(t *testing.T) {
+	var got statusRequest
+	body := `{"can_deploy":[
+	  {"name":"colette-api","ships":[
+	    {"number":5,"url":"u","project":null,"slug":null,"milestone":"2/4","held":false,"blocked_by":null},
+	    {"number":6,"url":"u","project":"Gift cards","slug":"g","milestone":null,"held":false,"blocked_by":null}],
+	   "unblocks":[],"last_deployed_at":null}],
+	  "nothing_to_ship":[],"not_tracked":[],"projects":[]}`
+	srv := statusServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"status"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	want := "Can deploy now\n" +
+		"  colette-api   ships #5 not linked, #6 not linked\n" +
+		"\nProjects (0 active)\n"
+	if h.out.String() != want {
+		t.Errorf("stdout = %q\nwant     %q", h.out, want)
+	}
+}
+
+func TestStatusProjectsTableShowsTheNextStepTextWithoutItsMeta(t *testing.T) {
+	var got statusRequest
+	body := `{"can_deploy":[],"nothing_to_ship":[],"not_tracked":[],"projects":[
+	  {"slug":"a","name":"Abc","deployed":1,"total":2,"current":{"number":1,"title":"Ab","state":"x","state_label":"Go"},
+	   "next_step":{"text":"Deploy api","meta":"ships #418","pull_requests":[]}}]}`
+	srv := statusServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"status"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	want := "Can deploy now: nothing\n\nProjects (1 active)\n" +
+		"  Abc   1 of 2  1 · Ab  Go  Deploy api\n"
+	if h.out.String() != want {
+		t.Errorf("stdout = %q\nwant     %q", h.out, want)
+	}
+}
