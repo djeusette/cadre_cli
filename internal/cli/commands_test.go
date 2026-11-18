@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -4101,11 +4102,97 @@ func TestLinkSendsTheMainCheckout(t *testing.T) {
 	if len(got.body) != 2 || got.body["github_full_name"] != "colette-club/colette-api" {
 		t.Errorf("body = %v", got.body)
 	}
-	if want := "Linked colette-api to " + clone + ". Its Deploy button in cadre opens there.\n"; h.out.String() != want {
+	want := "Linked colette-api to " + clone + ". Its Deploy button in cadre opens there.\n" +
+		"No Skills table in " + filepath.Join(clone, "AGENTS.md") + ". Setup shows how to write one: " + srv.URL + "/setup?part=skills\n"
+	if h.out.String() != want {
 		t.Errorf("stdout = %q, want %q", h.out, want)
 	}
 	if h.errb.Len() != 0 {
 		t.Errorf("stderr = %q", h.errb)
+	}
+}
+
+func TestLinkSaysWhenTheCheckoutHasNoSkillsTable(t *testing.T) {
+	noTable := func(clone, server string) string {
+		return "No Skills table in " + filepath.Join(clone, "AGENTS.md") + ". Setup shows how to write one: " + server + "/setup?part=skills\n"
+	}
+	none := func(string, string) string { return "" }
+	cases := []struct {
+		name      string
+		agentsMD  func(t *testing.T, clone string)
+		wantAfter func(clone, server string) string
+	}{
+		{"no AGENTS.md", func(*testing.T, string) {}, noTable},
+		{"no Skills section", writeAgentsMD("# Rules\n\n## Checks\n"), noTable},
+		{"a deeper Skills heading", writeAgentsMD("# Rules\n\n### Skills\n"), noTable},
+		{"a longer heading", writeAgentsMD("## Skills table\n"), noTable},
+		{"a Skills section", writeAgentsMD("# Rules\n\n## Skills\n\n| Skill | When | Install |\n"), none},
+		{"a Skills section with trailing spaces and CRLF", writeAgentsMD("# Rules\r\n## Skills  \r\n"), none},
+		{"a Skills section only in a code block", writeAgentsMD("Example:\n\n```md\n## Skills\n\n| Skill | When | Install |\n```\n"), noTable},
+		{"an example in a code block, then the section", writeAgentsMD("```md\n## Skills\n```\n\n## Skills\n"), none},
+		{"a lowercase heading", writeAgentsMD("## skills\n"), noTable},
+		{"a Skills section past the first MiB", writeAgentsMD(strings.Repeat("x", 1<<20) + "\n## Skills\n"), noTable},
+		{"an AGENTS.md that is a pipe", func(t *testing.T, clone string) {
+			if err := syscall.Mkfifo(filepath.Join(clone, "AGENTS.md"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}, none},
+		{"an AGENTS.md cadre may not open", func(t *testing.T, clone string) {
+			writeAgentsMD("# Rules\n")(t, clone)
+			if err := os.Chmod(filepath.Join(clone, "AGENTS.md"), 0o000); err != nil {
+				t.Fatal(err)
+			}
+		}, none},
+		{"an AGENTS.md cadre can't read", func(t *testing.T, clone string) {
+			if err := os.Mkdir(filepath.Join(clone, "AGENTS.md"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}, none},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, clone := linkClone(t)
+			tc.agentsMD(t, clone)
+			t.Chdir(clone)
+			var got linkRequest
+			srv := linkServer(t, 200, checkoutBody(clone), &got)
+			h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+			if code := cli.Run([]string{"link"}, h.deps); code != 0 {
+				t.Fatalf("code = %d, stderr %q", code, h.errb)
+			}
+			want := "Linked colette-api to " + clone + ". Its Deploy button in cadre opens there.\n" + tc.wantAfter(clone, srv.URL)
+			if h.out.String() != want {
+				t.Errorf("stdout = %q, want %q", h.out, want)
+			}
+		})
+	}
+}
+
+func TestLinkReadsTheMainCheckoutsAGENTSmd(t *testing.T) {
+	root, clone := linkClone(t)
+	writeAgentsMD("## Skills\n")(t, clone)
+	worktree := filepath.Join(root, "feature")
+	mustGit(t, clone, "worktree", "add", worktree, "-b", "feature")
+	t.Chdir(worktree)
+	var got linkRequest
+	srv := linkServer(t, 200, checkoutBody(clone), &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"link"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	if want := "Linked colette-api to " + clone + ". Its Deploy button in cadre opens there.\n"; h.out.String() != want {
+		t.Errorf("stdout = %q, want %q", h.out, want)
+	}
+}
+
+func writeAgentsMD(text string) func(t *testing.T, clone string) {
+	return func(t *testing.T, clone string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(clone, "AGENTS.md"), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
