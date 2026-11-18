@@ -600,6 +600,144 @@ func (c *Client) ShowRepository(ctx context.Context, repo string) (Repository, e
 	return shown, c.decode(status, resp, &shown)
 }
 
+// Status is what GET /api/status answers: what can deploy now, the names of the apps with nothing to ship or that
+// cadre does not track, and where each active project stands. Raw holds the response body as received.
+type Status struct {
+	CanDeploy     []QueueCard  `json:"can_deploy"`
+	NothingToShip []string     `json:"nothing_to_ship"`
+	NotTracked    []string     `json:"not_tracked"`
+	Projects      []ProjectRow `json:"projects"`
+	Raw           []byte       `json:"-"`
+}
+
+// QueueCard is an app, or a repo, with pull requests to ship. LastDeployedAt is nil before a first deploy.
+type QueueCard struct {
+	Name           string     `json:"name"`
+	Ships          []Ship     `json:"ships"`
+	Unblocks       []PullRef  `json:"unblocks"`
+	LastDeployedAt *time.Time `json:"last_deployed_at"`
+}
+
+// Ship is a pull request a deploy ships. Project, Slug and Milestone are nil when no milestone links it.
+type Ship struct {
+	Number    int      `json:"number"`
+	URL       string   `json:"url"`
+	Project   *string  `json:"project"`
+	Slug      *string  `json:"slug"`
+	Milestone *string  `json:"milestone"` // the milestone's number over the project's highest, as 2/4
+	Held      bool     `json:"held"`
+	BlockedBy *PullRef `json:"blocked_by"`
+}
+
+// PullRef names the app or repo of a pull request, and its number, which is nil when that step has none yet.
+type PullRef struct {
+	Name   string `json:"name"`
+	Number *int   `json:"number"`
+}
+
+// ProjectRow is an active project as `cadre status` lists it. Current and NextStep are nil when there is none.
+type ProjectRow struct {
+	Slug     string          `json:"slug"`
+	Name     string          `json:"name"`
+	Deployed int             `json:"deployed"`
+	Total    int             `json:"total"`
+	Current  *MilestoneState `json:"current"`
+	NextStep *NextStep       `json:"next_step"`
+}
+
+// MilestoneState is a milestone's number, title and state, with the label the Overview shows for it.
+type MilestoneState struct {
+	Number     int    `json:"number"`
+	Title      string `json:"title"`
+	State      string `json:"state"`
+	StateLabel string `json:"state_label"`
+}
+
+// NextStep is the sentence the Overview shows for what to do next. Each pull request it names is written #n in Text
+// and Meta, and listed once in PullRequests.
+type NextStep struct {
+	Text         string     `json:"text"`
+	Meta         string     `json:"meta"`
+	PullRequests []PullLink `json:"pull_requests"`
+}
+
+// PullLink is a pull request a next step names.
+type PullLink struct {
+	Number int    `json:"number"`
+	URL    string `json:"url"`
+}
+
+// ProjectStatus is what GET /api/projects/<slug>/status answers. Group is active, finished or archived. NextStep is
+// nil unless the project is active. Raw holds the response body as received.
+type ProjectStatus struct {
+	Slug       string            `json:"slug"`
+	Name       string            `json:"name"`
+	Group      string            `json:"group"`
+	Deployed   int               `json:"deployed"`
+	Total      int               `json:"total"`
+	NextStep   *NextStep         `json:"next_step"`
+	Milestones []MilestoneStatus `json:"milestones"`
+	Raw        []byte            `json:"-"`
+}
+
+// MilestoneStatus is a milestone with its steps in deploy order. NextStep is nil once the milestone is done.
+type MilestoneStatus struct {
+	MilestoneState
+	Current  bool         `json:"current"` // the first milestone not done
+	Steps    []StepStatus `json:"steps"`
+	NextStep *NextStep    `json:"next_step"`
+}
+
+// StepStatus is a deploy step: a repo, or one app of it (nil App for the whole repo), and the pull requests on it.
+type StepStatus struct {
+	Repo         string     `json:"repo"`
+	App          *string    `json:"app"`
+	PullRequests []StepPull `json:"pull_requests"`
+}
+
+// StepPull is a pull request as it reads on a step: Status is deployed, merged or the like, and StatusLabel its words.
+type StepPull struct {
+	Number      int    `json:"number"`
+	URL         string `json:"url"`
+	Title       string `json:"title"`
+	Status      string `json:"status"`
+	StatusLabel string `json:"status_label"`
+}
+
+// Status returns what can deploy now and where each active project stands. It returns ErrUnauthorized when the
+// server refuses the key. Any other non-200 answer, a 404 included, is a *StatusError: the route is not there, so
+// the server is older than the command or BaseURL is wrong.
+func (c *Client) Status(ctx context.Context) (Status, error) {
+	var shown Status
+	status, resp, err := c.do(ctx, http.MethodGet, "/api/status", nil)
+	if err != nil {
+		return shown, err
+	}
+	if status == http.StatusUnauthorized {
+		return shown, ErrUnauthorized
+	}
+	if status != http.StatusOK {
+		return shown, &StatusError{Status: status}
+	}
+	shown.Raw = resp
+	return shown, c.decode(status, resp, &shown)
+}
+
+// ProjectStatus returns one project's milestones step by step. It returns ErrProjectNotFound for a slug no project
+// has, and ErrUnauthorized when the server refuses the key.
+func (c *Client) ProjectStatus(ctx context.Context, slug string) (ProjectStatus, error) {
+	var shown ProjectStatus
+	status, resp, err := c.do(ctx, http.MethodGet, projectPath(slug, "/status"), nil)
+	if err != nil {
+		return shown, err
+	}
+	if status != http.StatusOK {
+		return shown, projectStatusError(status, resp)
+	}
+	shown.Raw = resp
+	return shown, c.decode(status, resp, &shown)
+}
+
 // BeforeDeployingItem is an open item of a pull request a deploy would ship.
 type BeforeDeployingItem struct {
 	Number int    `json:"number"`

@@ -18,6 +18,7 @@ import (
 const (
 	usageLogin            = "Usage: cadre login --url <url>\nRun cadre help login for details.\n"
 	usageWhoami           = "Usage: cadre whoami\nRun cadre help whoami for details.\n"
+	usageStatus           = "Usage: cadre status [<project>]\nRun cadre help status for details.\n"
 	usageProjectCreate    = "Usage: cadre project create <file>\nRun cadre help project create for details.\n"
 	usageProjectPull      = "Usage: cadre project pull <slug> [-o <file>]\nRun cadre help project pull for details.\n"
 	usageProjectUpdate    = "Usage: cadre project update <file>\nRun cadre help project update for details.\n"
@@ -41,7 +42,7 @@ const (
 // everyCommand and everyGroup are listed by hand, so a page that goes missing fails here.
 var (
 	everyCommand = []string{
-		"login", "whoami",
+		"login", "whoami", "status",
 		"project create", "project pull", "project update", "project archive", "project unarchive",
 		"spec pull", "spec push", "pr link", "repo set", "repo unset", "repo show",
 		"fly org add", "fly org remove", "vercel team add", "vercel team remove",
@@ -457,6 +458,7 @@ func TestWrongArgumentsPrintThatCommandsUsage(t *testing.T) {
 	}{
 		{[]string{"login"}, usageLogin},
 		{[]string{"whoami", "extra"}, usageWhoami},
+		{[]string{"status", "wish-reminders", "extra"}, usageStatus},
 		{[]string{"project", "create"}, usageProjectCreate},
 		{[]string{"project", "pull"}, usageProjectPull},
 		{[]string{"project", "update"}, usageProjectUpdate},

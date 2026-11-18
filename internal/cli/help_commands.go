@@ -45,6 +45,16 @@ that URL, and only that one.`,
 				summary: "Show the server and account you're signed in as",
 				flags:   []helpRow{{"--json", "Print the email and URL as JSON"}},
 			},
+			{
+				name:    "status",
+				summary: "Show what can deploy now and what is next",
+				forms:   []string{"[<project>]"},
+				about: `Prints what can deploy now and each active project's current milestone and
+next step. With a project, prints its milestones, each with its state, its PRs
+in deploy order and its next step.`,
+				flags:    []helpRow{{"--json", "Print the server's answer as JSON"}},
+				examples: []string{"cadre status", "cadre status wish-reminders"},
+			},
 		},
 	},
 	{

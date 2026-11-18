@@ -40,6 +40,8 @@ func Run(args []string, env Env) int {
 		return runLogin(env, asJSON, args[1:])
 	case "whoami":
 		return runCommand(env, asJSON, "whoami", args[1:], 0, whoami)
+	case "status":
+		return runStatus(env, asJSON, args[1:])
 	case "project":
 		return runProject(env, asJSON, args[1:])
 	case "spec":
