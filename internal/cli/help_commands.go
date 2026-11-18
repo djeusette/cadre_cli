@@ -363,7 +363,8 @@ Claude Desktop there. Run it anywhere in a checkout of a repo cadre knows: its
 origin names the repo. It stores the main checkout's folder, even when run from
 a linked worktree or a subfolder. In a worktree of a bare repository, it stores
 that worktree itself. Running it again replaces the folder. A repo cadre doesn't
-know is refused.`,
+know is refused. When that folder's AGENTS.md has no Skills table, it says so
+and points to the Skills part of cadre's Setup page.`,
 				flags:    []helpRow{jsonFlag},
 				examples: []string{"cd ~/Code/shop-api && cadre link"},
 			},
