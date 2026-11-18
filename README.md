@@ -31,6 +31,7 @@ cadre spec push wish-reminders/2 spec.md --base <version>
 | --- | --- |
 | `cadre login --url <url>` | Signs in to the Cadre at `<url>` from the browser, and stores that URL and a personal API key. The URL is required |
 | `cadre whoami` | Shows the server and the account you're signed in as |
+| `cadre status [<project>]` | Prints what can deploy now and each active project's current milestone and next step. With a project, prints its milestones, each with its state, its PRs in deploy order and its next step. With `--json`, prints the answer as received |
 | `cadre project create <file>` | Registers a project, its milestones and their deploy order, with each milestone's spec and design link and the project's design canvas link when the file has them |
 | `cadre project pull <slug> [-o <file>]` | Prints the project as the file `project update` takes (its `version` and each milestone's `number` included), or writes it to `<file>`. With `--json`, prints the answer as received |
 | `cadre project update <file>` | Sends a pulled and edited file, unchanged, to the project named by its `slug`, and prints the new version and the project's page. Refused when someone updated the project since you pulled it, or when it is archived |
