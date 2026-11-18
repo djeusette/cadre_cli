@@ -3,7 +3,9 @@ package cli_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/djeusette/cadre_cli/internal/cli"
 	"github.com/djeusette/cadre_cli/internal/config"
@@ -266,8 +268,32 @@ func TestStatusAnOlderServerIsAnError(t *testing.T) {
 	if code := cli.Run([]string{"status"}, h.deps); code != 1 {
 		t.Fatalf("code = %d", code)
 	}
-	if h.errb.Len() == 0 || h.out.Len() != 0 {
-		t.Errorf("stdout = %q, stderr = %q", h.out, h.errb)
+	want := "Could not complete the request to " + srv.URL + ": the server answered with an unexpected status 404\n"
+	if h.errb.String() != want || h.out.Len() != 0 {
+		t.Errorf("stdout = %q, stderr = %q\nwant stderr %q", h.out, h.errb, want)
+	}
+}
+
+func TestStatusLastDeployedIsADayInUTCWhateverTheZone(t *testing.T) {
+	ahead := time.FixedZone("ahead", 3*60*60)
+	previous := time.Local
+	time.Local = ahead
+	t.Cleanup(func() { time.Local = previous })
+
+	for _, sent := range []string{"2026-10-20T23:30:00Z", "2026-10-21T01:30:00+02:00"} {
+		var got statusRequest
+		body := `{"can_deploy":[{"name":"colette-api","ships":[
+		  {"number":5,"url":"u","project":null,"slug":null,"milestone":null,"held":false,"blocked_by":null}],
+		  "unblocks":[],"last_deployed_at":"` + sent + `"}],"nothing_to_ship":[],"not_tracked":[],"projects":[]}`
+		srv := statusServer(t, 200, body, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+		if code := cli.Run([]string{"status"}, h.deps); code != 0 {
+			t.Fatalf("code = %d, stderr %q", code, h.errb)
+		}
+		if want := "                last deployed Oct 20\n"; !strings.Contains(h.out.String(), want) {
+			t.Errorf("sent %s: stdout = %q, want it to contain %q", sent, h.out, want)
+		}
 	}
 }
 

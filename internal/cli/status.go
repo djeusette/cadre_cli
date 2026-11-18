@@ -28,7 +28,12 @@ func showStatus(ctx context.Context, s *session, _ []string) int {
 	if err != nil {
 		return s.failAPI(err)
 	}
-	return s.printStatus(shown.Raw, statusText(shown))
+	if s.asJSON {
+		fmt.Fprint(s.env.Stdout, string(shown.Raw))
+	} else {
+		fmt.Fprint(s.env.Stdout, statusText(shown))
+	}
+	return 0
 }
 
 func showProjectStatus(ctx context.Context, s *session, slug string) int {
@@ -42,15 +47,11 @@ func showProjectStatus(ctx context.Context, s *session, slug string) int {
 	if err != nil {
 		return s.failAPI(err)
 	}
-	return s.printStatus(shown.Raw, projectStatusText(shown))
-}
-
-// printStatus prints the server's answer as received with --json, else the text.
-func (s *session) printStatus(raw []byte, text string) int {
 	if s.asJSON {
-		text = string(raw)
+		fmt.Fprint(s.env.Stdout, string(shown.Raw))
+	} else {
+		fmt.Fprint(s.env.Stdout, projectStatusText(shown))
 	}
-	fmt.Fprint(s.env.Stdout, text)
 	return 0
 }
 
@@ -76,7 +77,7 @@ const (
 	otherColumnGap = 2
 )
 
-// queueText is a line per card, its name padded to the longest plus three spaces, and under `ships` a second line
+// queueText is a line per card, its name padded to the longest plus firstColumnGap, and under `ships` a second line
 // when the card unblocks something or has been deployed before.
 func queueText(cards []api.QueueCard) string {
 	if len(cards) == 0 {
@@ -164,8 +165,8 @@ func projectsText(projects []api.ProjectRow) string {
 	return table(rows)
 }
 
-// table prints rows under a two-space indent. The first column is padded to its longest value plus three spaces,
-// every other column but the last to its longest plus two, and the last is not padded.
+// table prints rows under a two-space indent. The first column is padded to its longest value plus firstColumnGap,
+// every other column but the last to its longest plus otherColumnGap, and the last is not padded.
 func table(rows [][]string) string {
 	var widths []int
 	for _, row := range rows {

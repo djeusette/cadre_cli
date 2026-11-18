@@ -635,7 +635,7 @@ type PullRef struct {
 	Number *int   `json:"number"`
 }
 
-// ProjectRow is an active project on the status page. Current and NextStep are nil when there is none.
+// ProjectRow is an active project as `cadre status` lists it. Current and NextStep are nil when there is none.
 type ProjectRow struct {
 	Slug     string          `json:"slug"`
 	Name     string          `json:"name"`
