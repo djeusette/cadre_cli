@@ -128,19 +128,25 @@ func TestStatusWithNothing(t *testing.T) {
 }
 
 func TestStatusJSONPrintsTheServersAnswer(t *testing.T) {
-	for name, args := range map[string][]string{
-		"queue":   {"status", "--json"},
-		"project": {"status", "wish-reminders", "--json"},
+	for name, c := range map[string]struct {
+		args []string
+		path string
+	}{
+		"queue":   {[]string{"status", "--json"}, "/api/status"},
+		"project": {[]string{"status", "wish-reminders", "--json"}, "/api/projects/wish-reminders/status"},
 	} {
 		var got statusRequest
 		srv := statusServer(t, 200, statusBody, &got)
 		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
 
-		if code := cli.Run(args, h.deps); code != 0 {
+		if code := cli.Run(c.args, h.deps); code != 0 {
 			t.Fatalf("%s: code = %d, stderr %q", name, code, h.errb)
 		}
 		if want := statusBody; h.out.String() != want {
 			t.Errorf("%s: stdout = %q", name, h.out)
+		}
+		if got.path != c.path {
+			t.Errorf("%s: path = %q, want %q", name, got.path, c.path)
 		}
 	}
 }
@@ -262,5 +268,103 @@ func TestStatusAnOlderServerIsAnError(t *testing.T) {
 	}
 	if h.errb.Len() == 0 || h.out.Len() != 0 {
 		t.Errorf("stdout = %q, stderr = %q", h.out, h.errb)
+	}
+}
+
+func TestStatusHeldAndBlockedTogether(t *testing.T) {
+	var got statusRequest
+	body := `{"can_deploy":[{"name":"colette-api","ships":[
+	  {"number":37,"url":"u","project":"Wish reminders","slug":"w","milestone":"2/4","held":true,"blocked_by":{"name":"api","number":36}}],
+	  "unblocks":[],"last_deployed_at":null}],"nothing_to_ship":[],"not_tracked":[],"projects":[]}`
+	srv := statusServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"status"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	want := "Can deploy now\n  colette-api   ships #37 Wish reminders 2/4 blocked by api #36 held\n\nProjects (0 active)\n"
+	if h.out.String() != want {
+		t.Errorf("stdout = %q\nwant     %q", h.out, want)
+	}
+}
+
+func TestStatusCardWithOnlyALastDeploy(t *testing.T) {
+	var got statusRequest
+	body := `{"can_deploy":[{"name":"colette-api","ships":[
+	  {"number":5,"url":"u","project":null,"slug":null,"milestone":null,"held":false,"blocked_by":null}],
+	  "unblocks":[],"last_deployed_at":"2026-10-20T23:30:00Z"}],"nothing_to_ship":[],"not_tracked":[],"projects":[]}`
+	srv := statusServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"status"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	want := "Can deploy now\n  colette-api   ships #5 not linked\n                last deployed Oct 20\n\nProjects (0 active)\n"
+	if h.out.String() != want {
+		t.Errorf("stdout = %q\nwant     %q", h.out, want)
+	}
+}
+
+func TestStatusProjectWithNoCurrentMilestoneOrNextStep(t *testing.T) {
+	var got statusRequest
+	body := `{"can_deploy":[],"nothing_to_ship":[],"not_tracked":[],"projects":[
+	  {"slug":"a","name":"Done","deployed":2,"total":2,"current":null,"next_step":null},
+	  {"slug":"b","name":"Open","deployed":1,"total":2,"current":{"number":2,"title":"Two","state":"x","state_label":"Go"},"next_step":null},
+	  {"slug":"c","name":"Odd","deployed":0,"total":2,"current":null,"next_step":{"text":"Wait","meta":"","pull_requests":[]}}]}`
+	srv := statusServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"status"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	want := "Can deploy now: nothing\n\nProjects (3 active)\n" +
+		"  Done   2 of 2  -        -   -\n" +
+		"  Open   1 of 2  2 · Two  Go  -\n" +
+		"  Odd    0 of 2  -        -   Wait\n"
+	if h.out.String() != want {
+		t.Errorf("stdout = %q\nwant     %q", h.out, want)
+	}
+}
+
+func TestProjectStatusStepWithAnAppAndNoPR(t *testing.T) {
+	var got statusRequest
+	body := `{"slug":"w","name":"Wish","group":"active","deployed":0,"total":1,"next_step":null,
+	  "milestones":[{"number":1,"title":"One","state":"open","state_label":"Open","current":true,
+	    "steps":[{"repo":"colette-mobile","app":"club-mobile","pull_requests":[]}],"next_step":null}]}`
+	srv := statusServer(t, 200, body, &got)
+	h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+	if code := cli.Run([]string{"status", "w"}, h.deps); code != 0 {
+		t.Fatalf("code = %d, stderr %q", code, h.errb)
+	}
+	want := "Wish · 0 of 1 deployed\n\n1 · One  Open\n    colette-mobile / club-mobile  no PR yet\n"
+	if h.out.String() != want {
+		t.Errorf("stdout = %q\nwant     %q", h.out, want)
+	}
+}
+
+func TestStatusRefusedKeyAndServerError(t *testing.T) {
+	for name, c := range map[string]struct {
+		args   []string
+		status int
+		want   func(url string) string
+	}{
+		"401 on a project": {[]string{"status", "wish-reminders"}, 401, func(u string) string {
+			return "Your key for " + u + " is no longer valid. Run cadre login --url " + u + ".\n"
+		}},
+		"500 on the queue": {[]string{"status"}, 500, func(u string) string {
+			return "Could not complete the request to " + u + ": the server answered with an unexpected status 500\n"
+		}},
+	} {
+		var got statusRequest
+		srv := statusServer(t, c.status, `{"error":"x"}`, &got)
+		h := newHarness(t, srv, &config.Config{APIKey: "cadre_abc"})
+
+		if code := cli.Run(c.args, h.deps); code != 1 {
+			t.Fatalf("%s: code = %d", name, code)
+		}
+		if h.errb.String() != c.want(srv.URL) || h.out.Len() != 0 {
+			t.Errorf("%s: stdout = %q, stderr = %q", name, h.out, h.errb)
+		}
 	}
 }

@@ -28,12 +28,7 @@ func showStatus(ctx context.Context, s *session, _ []string) int {
 	if err != nil {
 		return s.failAPI(err)
 	}
-	if s.asJSON {
-		fmt.Fprint(s.env.Stdout, string(shown.Raw))
-		return 0
-	}
-	fmt.Fprint(s.env.Stdout, statusText(shown))
-	return 0
+	return s.printStatus(shown.Raw, statusText(shown))
 }
 
 func showProjectStatus(ctx context.Context, s *session, slug string) int {
@@ -47,11 +42,15 @@ func showProjectStatus(ctx context.Context, s *session, slug string) int {
 	if err != nil {
 		return s.failAPI(err)
 	}
+	return s.printStatus(shown.Raw, projectStatusText(shown))
+}
+
+// printStatus prints the server's answer as received with --json, else the text.
+func (s *session) printStatus(raw []byte, text string) int {
 	if s.asJSON {
-		fmt.Fprint(s.env.Stdout, string(shown.Raw))
-		return 0
+		text = string(raw)
 	}
-	fmt.Fprint(s.env.Stdout, projectStatusText(shown))
+	fmt.Fprint(s.env.Stdout, text)
 	return 0
 }
 
@@ -70,6 +69,13 @@ func statusText(status api.Status) string {
 	return b.String()
 }
 
+// A column is padded to its longest value plus a gap of spaces: firstColumnGap for the first column, otherColumnGap
+// for the others. queueText and table both read these.
+const (
+	firstColumnGap = 3
+	otherColumnGap = 2
+)
+
 // queueText is a line per card, its name padded to the longest plus three spaces, and under `ships` a second line
 // when the card unblocks something or has been deployed before.
 func queueText(cards []api.QueueCard) string {
@@ -80,7 +86,7 @@ func queueText(cards []api.QueueCard) string {
 	for _, c := range cards {
 		width = max(width, utf8.RuneCountInString(c.Name))
 	}
-	width += 3
+	width += firstColumnGap
 
 	var b strings.Builder
 	b.WriteString("Can deploy now\n")
@@ -179,9 +185,9 @@ func table(rows [][]string) string {
 			case len(row) - 1:
 				b.WriteString(cell)
 			case 0:
-				b.WriteString(pad(cell, widths[i]+3))
+				b.WriteString(pad(cell, widths[i]+firstColumnGap))
 			default:
-				b.WriteString(pad(cell, widths[i]+2))
+				b.WriteString(pad(cell, widths[i]+otherColumnGap))
 			}
 		}
 		b.WriteString("\n")
