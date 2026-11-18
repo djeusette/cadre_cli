@@ -1240,7 +1240,7 @@ func TestSetTargetDecodesABuildsCommit(t *testing.T) {
 	}
 }
 
-const statusBody = `{"can_deploy":[{"name":"colette-api","ships":[{"number":418,"url":"https://github.com/colette-club/colette-api/pull/418","project":"Wish reminders","slug":"wish-reminders","milestone":"2/4","held":false,"blocked_by":null},{"number":399,"url":"https://github.com/colette-club/colette-api/pull/399","project":null,"slug":null,"milestone":null,"held":true,"blocked_by":{"name":"api","number":null}}],"unblocks":[{"name":"club-mobile","number":91}],"last_deployed_at":"2026-10-20T14:02:00Z"}],"nothing_to_ship":["club-mobile"],"not_tracked":["colette-site"],"projects":[{"slug":"wish-reminders","name":"Wish reminders","deployed":1,"total":4,"current":{"number":2,"title":"Set a reminder in the app","state":"can_deploy","state_label":"Can deploy"},"next_step":{"text":"Deploy colette-api","meta":"ships #418","pull_requests":[{"number":418,"url":"https://github.com/colette-club/colette-api/pull/418"}]}},{"slug":"empty","name":"Empty","deployed":0,"total":0,"current":null,"next_step":null}]}`
+const statusBody = `{"can_deploy":[{"name":"colette-api","ships":[{"number":418,"url":"https://github.com/colette-club/colette-api/pull/418","project":"Wish reminders","slug":"wish-reminders","milestone":"2/4","held":false,"blocked_by":null},{"number":399,"url":"https://github.com/colette-club/colette-api/pull/399","project":null,"slug":null,"milestone":null,"held":true,"blocked_by":{"name":"api","number":null}}],"unblocks":[{"name":"club-mobile","number":91},{"name":"club-web","number":null}],"last_deployed_at":"2026-10-20T14:02:00Z"}],"nothing_to_ship":["club-mobile"],"not_tracked":["colette-site"],"projects":[{"slug":"wish-reminders","name":"Wish reminders","deployed":1,"total":4,"current":{"number":2,"title":"Set a reminder in the app","state":"can_deploy","state_label":"Can deploy"},"next_step":{"text":"Deploy colette-api","meta":"ships #418","pull_requests":[{"number":418,"url":"https://github.com/colette-club/colette-api/pull/418"}]}},{"slug":"empty","name":"Empty","deployed":0,"total":0,"current":null,"next_step":null}]}`
 
 func TestStatusDecodesTheQueueAndProjects(t *testing.T) {
 	var method, path string
@@ -1262,7 +1262,7 @@ func TestStatusDecodesTheQueueAndProjects(t *testing.T) {
 		t.Fatalf("can_deploy = %+v", got.CanDeploy)
 	}
 	card := got.CanDeploy[0]
-	if card.Name != "colette-api" || len(card.Ships) != 2 || len(card.Unblocks) != 1 {
+	if card.Name != "colette-api" || len(card.Ships) != 2 || len(card.Unblocks) != 2 {
 		t.Fatalf("card = %+v", card)
 	}
 	linked, unlinked := card.Ships[0], card.Ships[1]
@@ -1276,8 +1276,14 @@ func TestStatusDecodesTheQueueAndProjects(t *testing.T) {
 	if b := unlinked.BlockedBy; b == nil || b.Name != "api" || b.Number != nil {
 		t.Fatalf("blocked_by = %+v", b)
 	}
+	if linked.URL != "https://github.com/colette-club/colette-api/pull/418" {
+		t.Fatalf("ship url = %s", linked.URL)
+	}
 	if u := card.Unblocks[0]; u.Name != "club-mobile" || u.Number == nil || *u.Number != 91 {
 		t.Fatalf("unblocks = %+v", u)
+	}
+	if u := card.Unblocks[1]; u.Name != "club-web" || u.Number != nil {
+		t.Fatalf("unblocks without a number = %+v", u)
 	}
 	if card.LastDeployedAt == nil || !card.LastDeployedAt.Equal(time.Date(2026, 10, 20, 14, 2, 0, 0, time.UTC)) {
 		t.Fatalf("last_deployed_at = %v", card.LastDeployedAt)
@@ -1289,14 +1295,41 @@ func TestStatusDecodesTheQueueAndProjects(t *testing.T) {
 		t.Fatalf("projects = %+v", got.Projects)
 	}
 	p := got.Projects[0]
-	if p.Slug != "wish-reminders" || p.Name != "Wish reminders" || p.Deployed != 1 || p.Total != 4 ||
-		p.Current == nil || p.Current.Number != 2 || p.Current.State != "can_deploy" || p.Current.StateLabel != "Can deploy" ||
-		p.NextStep == nil || p.NextStep.Text != "Deploy colette-api" || p.NextStep.Meta != "ships #418" ||
-		len(p.NextStep.PullRequests) != 1 || p.NextStep.PullRequests[0].Number != 418 {
-		t.Fatalf("project = %+v", p)
+	if p.Slug != "wish-reminders" || p.Name != "Wish reminders" {
+		t.Fatalf("project names = %+v", p)
+	}
+	if p.Deployed != 1 || p.Total != 4 {
+		t.Fatalf("project counts = %d of %d", p.Deployed, p.Total)
+	}
+	if p.Current == nil || p.Current.Number != 2 || p.Current.Title != "Set a reminder in the app" ||
+		p.Current.State != "can_deploy" || p.Current.StateLabel != "Can deploy" {
+		t.Fatalf("current = %+v", p.Current)
+	}
+	if p.NextStep == nil || p.NextStep.Text != "Deploy colette-api" || p.NextStep.Meta != "ships #418" {
+		t.Fatalf("next step = %+v", p.NextStep)
+	}
+	if prs := p.NextStep.PullRequests; len(prs) != 1 || prs[0].Number != 418 ||
+		prs[0].URL != "https://github.com/colette-club/colette-api/pull/418" {
+		t.Fatalf("next step pull requests = %+v", prs)
 	}
 	if e := got.Projects[1]; e.Current != nil || e.NextStep != nil {
 		t.Fatalf("empty project = %+v", e)
+	}
+}
+
+func TestStatusMapsNotFoundToAGenericStatusError(t *testing.T) {
+	c := newClient(t, reply(http.StatusNotFound, `{"error":"not_found"}`))
+	_, err := c.Status(context.Background())
+	var statusErr *api.StatusError
+	if errors.Is(err, api.ErrProjectNotFound) || !errors.As(err, &statusErr) || statusErr.Status != http.StatusNotFound {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestProjectStatusMapsUnauthorized(t *testing.T) {
+	c := newClient(t, reply(http.StatusUnauthorized, `{"error":"unauthorized"}`))
+	if _, err := c.ProjectStatus(context.Background(), "wish-reminders"); !errors.Is(err, api.ErrUnauthorized) {
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -1330,12 +1363,13 @@ func TestProjectStatusEscapesTheSlugAndMapsNotFound(t *testing.T) {
 		t.Fatalf("project = %+v", got)
 	}
 	m := got.Milestones[0]
-	if m.Number != 2 || m.StateLabel != "Can deploy" || !m.Current || m.NextStep == nil || len(m.Steps) != 2 {
+	if m.Number != 2 || m.Title != "Set a reminder in the app" || m.StateLabel != "Can deploy" || !m.Current || m.NextStep == nil || len(m.Steps) != 2 {
 		t.Fatalf("milestone = %+v", m)
 	}
 	first, second := m.Steps[0], m.Steps[1]
 	if first.Repo != "colette-api" || first.App != nil || len(first.PullRequests) != 1 ||
-		first.PullRequests[0].Status != "merged" || first.PullRequests[0].StatusLabel != "Merged" || first.PullRequests[0].Title != "Add reminders" {
+		first.PullRequests[0].Status != "merged" || first.PullRequests[0].StatusLabel != "Merged" || first.PullRequests[0].Title != "Add reminders" ||
+		first.PullRequests[0].URL != "https://github.com/colette-club/colette-api/pull/418" {
 		t.Fatalf("first step = %+v", first)
 	}
 	if second.App == nil || *second.App != "ios" || len(second.PullRequests) != 0 {

@@ -705,39 +705,37 @@ type StepPull struct {
 }
 
 // Status returns what can deploy now and where each active project stands. It returns ErrUnauthorized when the
-// server refuses the key.
-func (c *Client) Status(ctx context.Context) (*Status, error) {
+// server refuses the key. Any other non-200 answer, a 404 included, is a *StatusError: the route is not there, so
+// the server is older than the command or BaseURL is wrong.
+func (c *Client) Status(ctx context.Context) (Status, error) {
 	var shown Status
 	status, resp, err := c.do(ctx, http.MethodGet, "/api/status", nil)
 	if err != nil {
-		return nil, err
+		return shown, err
+	}
+	if status == http.StatusUnauthorized {
+		return shown, ErrUnauthorized
 	}
 	if status != http.StatusOK {
-		return nil, projectStatusError(status, resp)
+		return shown, &StatusError{Status: status}
 	}
 	shown.Raw = resp
-	if err := c.decode(status, resp, &shown); err != nil {
-		return nil, err
-	}
-	return &shown, nil
+	return shown, c.decode(status, resp, &shown)
 }
 
 // ProjectStatus returns one project's milestones step by step. It returns ErrProjectNotFound for a slug no project
 // has, and ErrUnauthorized when the server refuses the key.
-func (c *Client) ProjectStatus(ctx context.Context, slug string) (*ProjectStatus, error) {
+func (c *Client) ProjectStatus(ctx context.Context, slug string) (ProjectStatus, error) {
 	var shown ProjectStatus
 	status, resp, err := c.do(ctx, http.MethodGet, projectPath(slug, "/status"), nil)
 	if err != nil {
-		return nil, err
+		return shown, err
 	}
 	if status != http.StatusOK {
-		return nil, projectStatusError(status, resp)
+		return shown, projectStatusError(status, resp)
 	}
 	shown.Raw = resp
-	if err := c.decode(status, resp, &shown); err != nil {
-		return nil, err
-	}
-	return &shown, nil
+	return shown, c.decode(status, resp, &shown)
 }
 
 // BeforeDeployingItem is an open item of a pull request a deploy would ship.
