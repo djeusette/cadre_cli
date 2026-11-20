@@ -560,3 +560,22 @@ func TestHelpOfTheAddCommandsSaysAKeyGoesOverHTTPSOnly(t *testing.T) {
 		}
 	}
 }
+
+// The project create example gives design links in the form the cadre skill writes: the canvas
+// artifact link, and per milestone that link opened on its page.
+func TestProjectCreateHelpGivesArtifactDesignLinks(t *testing.T) {
+	srv, _ := helpServer(t)
+	page := helpFor(t, srv, "help", "project", "create")
+
+	for _, want := range []string{
+		`"design_url": "https://claude.ai/artifact/...#page-..."`,
+		`"canvas_url": "https://claude.ai/artifact/..."`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("help project create lacks %s", want)
+		}
+	}
+	if strings.Contains(page, "claude.ai/design/p") {
+		t.Errorf("help project create still gives a claude.ai/design/p link")
+	}
+}
