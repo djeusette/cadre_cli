@@ -76,10 +76,10 @@ name, slug, end_goal and each milestone's title and repos are required:
         "title": "Members get a reminder before a wish expires",
         "repos": ["shop-api", "shop-mobile"],
         "spec": "# Members get a reminder\n\n...",
-        "design_url": "https://claude.ai/design/p/..."
+        "design_url": "https://claude.ai/artifact/...#page-..."
       }
     ],
-    "canvas_url": "https://claude.ai/design/p/..."
+    "canvas_url": "https://claude.ai/artifact/..."
   }`,
 				flags:    []helpRow{jsonFlag},
 				examples: []string{"cadre project create project.json"},
